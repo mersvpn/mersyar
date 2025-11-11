@@ -9,8 +9,7 @@ from telegram.helpers import escape_markdown
 
 from .data_manager import normalize_username
 from shared.keyboards import get_user_management_keyboard
-from shared.callbacks import end_conversation_and_show_menu # <--- وارد کردن تابع
-from .api import get_all_users as get_all_marzban_users
+from shared import panel_utils
 from database.crud import user_note as crud_user_note
 
 LOGGER = logging.getLogger(__name__)
@@ -19,6 +18,7 @@ GET_DURATION, GET_DATA_LIMIT, GET_PRICE = range(3)
 USERS_PER_PAGE = 10
 
 async def prompt_for_note_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    LOGGER.critical("!!!!!! [NOTE DEBUG] Entering prompt_for_note_details (Step 1) !!!!!!")
     from shared.translator import _
 
     query = update.callback_query
@@ -49,6 +49,7 @@ async def prompt_for_note_details(update: Update, context: ContextTypes.DEFAULT_
     return GET_DURATION
 
 async def get_duration_and_ask_for_data_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    LOGGER.critical("!!!!!! [NOTE DEBUG] Entering get_duration_and_ask_for_data_limit (Step 2) !!!!!!")
     from shared.translator import _
     try:
         duration = int(update.message.text)
@@ -77,6 +78,7 @@ async def get_data_limit_and_ask_for_price(update: Update, context: ContextTypes
     return GET_PRICE
 
 async def get_price_and_save_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    from modules.general.actions import end_conversation_and_show_menu
     from shared.translator import _
     
     username = context.user_data.get('note_username')
@@ -136,7 +138,7 @@ async def list_users_with_subscriptions(update: Update, context: ContextTypes.DE
         message_to_edit = await update.message.reply_text(_("marzban.marzban_note.loading_subscriptions"))
 
     all_notes_obj = await crud_user_note.get_all_users_with_notes()
-    marzban_users = await get_all_marzban_users()
+    marzban_users = await panel_utils.get_all_users_from_all_panels()
     
     if marzban_users is None:
         await message_to_edit.edit_text(_("marzban.marzban_display.panel_connection_error")); return

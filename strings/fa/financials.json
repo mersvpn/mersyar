@@ -207,7 +207,23 @@
     "invoice_payable_amount": "\n✅ مبلغ نهایی قابل پرداخت: *{amount} تومان*\n",
     "button_pay_with_wallet_full": "پرداخت {price} تومان از کیف پول",
     "invoice_description_renewal": "تمدید اشتراک برای {days} روز ({volume} گیگ)",
-    "error_unknown_invoice_type": "❌ **خطا:** نوع فاکتور نامشخص یا پشتیبانی‌نشده است."
+    "error_unknown_invoice_type": "❌ **خطا:** نوع فاکتور نامشخص یا پشتیبانی‌نشده است.",
+
+    "invoice_number_label": "شماره فاکتور:",
+    "invoice_service_details_label": "جزئیات سرویس:",
+    "invoice_panel_name_label": "پنل:",
+    "invoice_username_label": "نام کاربری:",
+    "invoice_plan_type_label": "نوع:",
+    "invoice_volume_label": "حجم سرویس:",
+    "invoice_duration_label": "مدت زمان:",
+    "invoice_payment_summary_label": "جزئیات پرداخت:",
+    "invoice_price_label": "مبلغ کل:",
+    "invoice_wallet_deduction_label": "کسر از کیف پول:",
+    "invoice_payable_amount_label": "مبلغ نهایی قابل پرداخت:",
+    "invoice_payment_details_label": "اطلاعات پرداخت:",
+    "invoice_card_number_label": "شماره کارت:",
+    "invoice_card_holder_label": "به نام:"
+  
   },
   "financials_balance": {
     "prompt_for_user_id": "👤 *مدیریت موجودی کاربر*\n\nلطفاً آیدی عددی تلگرام کاربر مورد نظر را وارد کنید:",

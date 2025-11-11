@@ -52,7 +52,9 @@ async def save_bot_settings(settings_to_update: Dict[str, Any]) -> bool:
     """
     Saves or updates multiple settings in the bot_settings table.
     Uses an INSERT ... ON DUPLICATE KEY UPDATE statement for efficiency.
+    ✨ FIX: Directly updates the cache upon successful save to ensure consistency.
     """
+    global _bot_settings_cache
     if not settings_to_update:
         return True
 
@@ -74,11 +76,23 @@ async def save_bot_settings(settings_to_update: Dict[str, Any]) -> bool:
         try:
             await session.execute(update_stmt)
             await session.commit()
-            _invalidate_cache()
+            
+            # --- Key Change Starts Here ---
+            # Instead of just invalidating, we proactively update the cache.
+            # This ensures that any part of the code accessing the settings
+            # immediately gets the fresh data without needing a re-read from the DB.
+            if _bot_settings_cache is not None:
+                _bot_settings_cache.update(settings_to_update)
+                LOGGER.info(f"Bot settings cache updated with: {list(settings_to_update.keys())}")
+            else:
+                # If cache was empty, just invalidate so the next load gets everything fresh.
+                _invalidate_cache()
+            # --- Key Change Ends Here ---
+
             return True
         except Exception as e:
             await session.rollback()
             LOGGER.error(f"Failed to save bot settings: {e}", exc_info=True)
             return False
 
-# --- END OF FILE database/crud/bot_setting.py ---
+# --- END: Replace this function ---

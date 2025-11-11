@@ -167,22 +167,33 @@ manage_bot() {
                show_menu
                ;;
            5)
-               info "Updating bot by rebuilding the image from GitHub..."
-               warning "This may take a few minutes."
-               
-               info "Step 1: Building the new image..."
-               if docker compose build --no-cache bot; then
-                   info "Step 2: Re-creating the container with the new image..."
-                   if docker compose up -d; then
-                       success "Bot updated successfully!"
-                   else
-                       error "Failed to re-create the container."
-                   fi
-               else
-                   error "Failed to build the new image."
-               fi
-               show_menu
-               ;;
+                info "Updating bot by rebuilding the image from GitHub..."
+                warning "This may take a few minutes."
+                
+                info "Step 1: Building the new image from the latest release..."
+                if docker compose build --no-cache bot; then
+                    info "Step 2: Re-creating the container with the new image..."
+                    if docker compose up -d; then
+                        success "Container updated successfully!"
+                        
+                        # NEW STEP: Run migrations after update
+                        info "Step 3: Applying database migrations..."
+                        sleep 5 # Give the bot a moment to start
+                        if docker compose exec -T bot bash -c "pip install alembic pymysql sqlalchemy python-dotenv && alembic upgrade head"; then
+                            success "Database migrations applied."
+                            info "Bot is now fully updated."
+                        else
+                            error "Database migration failed during update. Please check logs."
+                        fi
+                        
+                    else
+                        error "Failed to re-create the container."
+                    fi
+                else
+                    error "Failed to build the new image."
+                fi
+                show_menu
+                ;;
            6)
                warning "This will re-run the full installation process."
                read -p "Are you sure you want to continue? (y/n): " confirm
@@ -285,32 +296,19 @@ ENV PYTHONUNBUFFERED 1
 ARG GITHUB_USER="mersvpn"
 ARG GITHUB_REPO="mersyar-bot"
 WORKDIR /app
+# Download and extract the latest release
 RUN LATEST_TAG=$(wget -qO- "https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/') && \
     DOWNLOAD_URL="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/archive/refs/tags/${LATEST_TAG}.tar.gz" && \
     wget -q "$DOWNLOAD_URL" -O latest_release.tar.gz && \
     tar -xzf latest_release.tar.gz --strip-components=1 && \
     rm latest_release.tar.gz
+# Install python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
-COPY entrypoint.sh /usr/local/bin/
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# The CMD will be used to run the bot
 CMD ["python", "bot.py"]
 EOF
 
-    info "-> Creating entrypoint.sh script..."
-    cat << 'EOF' > entrypoint.sh
-#!/bin/sh
-set -e
 
-echo "Entrypoint: Waiting for database to be fully available..."
-sleep 3
-
-echo "Entrypoint: Running database migrations..."
-alembic upgrade head
-
-echo "Entrypoint: Migrations complete. Starting bot..."
-exec "$@"
-EOF
-    chmod +x entrypoint.sh
      # --- START OF CORRECTED CODE BLOCK ---
     info "-> Creating docker-compose.yml with healthchecks..."
     cat << 'EOF' > docker-compose.yml
@@ -372,9 +370,21 @@ EOF
 
     
     
-    # --- 4. Build and Run Docker Containers ---
-    info "[4/7] Building and starting Docker containers... (This may take a few minutes)"
+    # --- 4. Build, Run, and Migrate ---
+    info "[4/7] Building and starting Docker containers..."
     docker compose up --build -d
+
+    info "Waiting a few seconds for the container to initialize..."
+    sleep 10
+    
+    info "Running database migrations inside the container..."
+    if ! docker compose exec -T bot bash -c "pip install alembic pymysql sqlalchemy python-dotenv && alembic upgrade head"; then
+        error "Database migration failed. Please check the logs."
+        error "To see logs, run: mersyar"
+        error "Then select option 1 (View Bot Logs)."
+        exit 1
+    fi
+    success "Database migration completed successfully."
 
     # ==============================================================================
     #                      --- START OF REVISED NGINX/SSL LOGIC ---

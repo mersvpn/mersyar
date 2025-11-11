@@ -1,16 +1,27 @@
 # --- START OF FILE modules/customer/actions/receipt.py ---
 import logging
+import html
+from telegram.ext import (
+    ConversationHandler, 
+    MessageHandler, 
+    CallbackQueryHandler, 
+    filters
+)
+from database.crud import panel_credential as crud_panel
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
-from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from shared.financial_utils import calculate_payment_details
 from config import config
 from database.crud import pending_invoice as crud_invoice
+from database.crud import user as crud_user
 from shared.keyboards import get_customer_shop_keyboard
 from shared.translator import _
+from shared.log_channel import send_log
 from shared.callback_types import SendReceipt
-
+from database.crud import bot_setting as crud_bot_setting
+from modules.payment.actions.approval import approve_payment
 LOGGER = logging.getLogger(__name__)
 
 CHOOSE_INVOICE, GET_RECEIPT_PHOTO = range(2)
@@ -116,62 +127,88 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if not invoice_id:
         await update.message.reply_text(_("customer.receipt.internal_error_start_over"), reply_markup=get_customer_shop_keyboard())
         return ConversationHandler.END
-        
+
+    await update.message.reply_text(_("customer.receipt.sent_to_support_success"), reply_markup=get_customer_shop_keyboard())
+    
     invoice = await crud_invoice.get_pending_invoice_by_id(invoice_id)
     if not invoice:
-        await update.message.reply_text(_("customer.receipt.invoice_info_not_found"), reply_markup=get_customer_shop_keyboard())
+        LOGGER.warning(f"Could not find invoice #{invoice_id} after user {user.id} submitted a photo.")
+        context.user_data.clear()
         return ConversationHandler.END
 
+    # --- START: Building the new, beautiful caption for admin ---
     total_price = float(invoice.price)
     plan_details = invoice.plan_details
-
-    payment_info = await calculate_payment_details(user.id, total_price)
-    paid_from_wallet = payment_info["paid_from_wallet"]
-    payable_amount = payment_info["payable_amount"]
+    paid_from_wallet = float(invoice.from_wallet_amount or 0)
+    payable_amount = total_price - paid_from_wallet
     
-    # Build caption parts
-    caption = _("customer.receipt.admin_caption_title", invoice_id=invoice_id)
-    caption += _("customer.receipt.admin_caption_user", full_name=user.full_name, user_id=f"`{user.id}`")
+    # Fetch panel name if available
+    panel_name = _("customer.receipt.panel_not_specified")
+    if plan_details.get('panel_id'):
+        panel = await crud_panel.get_panel_by_id(plan_details['panel_id'])
+        if panel:
+            panel_name = panel.name
 
-    # Add plan details section
-    caption += _("customer.receipt.admin_caption_plan_details_title")
-    if plan_details.get('invoice_type') == 'WALLET_CHARGE':
-        caption += _("customer.receipt.admin_caption_plan_wallet", amount=f"{plan_details.get('amount', 0):,.0f}")
+    caption = f"🧾 <b>{_('customer.receipt.admin_header', invoice_id=invoice_id)}</b>\n"
+    caption += "➖➖➖➖➖➖➖➖➖➖\n"
+    caption += f"👤 <b>{_('customer.receipt.admin_user_label')}</b> {html.escape(user.full_name)}\n"
+    caption += f"🔢 <b>{_('customer.receipt.admin_id_label')}</b> <code>{user.id}</code>\n\n"
+    
+    caption += f"📦 <b>{_('customer.receipt.admin_plan_details_label')}</b>\n"
+    
+    invoice_type = plan_details.get('invoice_type', 'LEGACY')
+    if invoice_type == 'WALLET_CHARGE':
+        caption += f"▫️ {_('customer.receipt.admin_service_label')} <b>{_('customer.receipt.wallet_charge_label')}</b>\n"
     else:
-        username = plan_details.get('marzban_username') or plan_details.get('username', 'N/A')
-        volume = plan_details.get('data_limit_gb') or plan_details.get('volume', 'N/A')
-        duration = plan_details.get('renewal_days') or plan_details.get('duration', 'N/A')
-        caption += _("customer.receipt.admin_caption_plan_service", username=username, volume=volume, duration=duration)
+        caption += f"🖥️ {_('customer.receipt.admin_panel_label')} <b>{html.escape(panel_name)}</b>\n"
+        caption += f"▫️ {_('customer.receipt.admin_service_label')} <code>{html.escape(plan_details.get('username', 'N/A'))}</code>\n"
+        caption += f"▫️ {_('customer.receipt.admin_volume_label')} {plan_details.get('volume', 'N/A')} GB\n"
+        duration = plan_details.get('duration', 'N/A')
+        duration_text = f"{duration} روز" if invoice_type != "DATA_TOP_UP" else _("customer.customer_service.data_top_up_label")
+        caption += f"▫️ {_('customer.receipt.admin_duration_label')} {duration_text}\n"
 
-    # Add financial details section only if it's NOT a wallet charge
-    if plan_details.get('invoice_type') != 'WALLET_CHARGE':
-        caption += _("customer.receipt.admin_caption_financial_details_title")
-        caption += _("customer.receipt.admin_caption_financial_total", price=f"{total_price:,.0f}")
-        if paid_from_wallet > 0:
-            caption += _("customer.receipt.admin_caption_financial_wallet", amount=f"{paid_from_wallet:,.0f}")
-        caption += _("customer.receipt.admin_caption_financial_payable", amount=f"{payable_amount:,.0f}")
+    caption += f"\n💰 <b>{_('customer.receipt.admin_financial_details_label')}</b>\n"
+    caption += f"▫️ {_('customer.receipt.admin_total_price_label')} {total_price:,.0f} تومان\n"
+    if paid_from_wallet > 0:
+        caption += f"▫️ {_('customer.receipt.admin_wallet_deduction_label')} {paid_from_wallet:,.0f} تومان\n"
+    caption += f"▫️ {_('customer.receipt.admin_payable_label')} <b>{payable_amount:,.0f} تومان</b>\n"
+    
+    caption += "➖➖➖➖➖➖➖➖➖➖\n"
+    caption += f"{_('customer.receipt.admin_footer')}"
+    # --- END: Building the new caption ---
 
-    caption += _("customer.receipt.admin_caption_footer")
-        
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(_("keyboards.buttons.approve_payment"), callback_data=f"approve_receipt_{invoice_id}"),
-            InlineKeyboardButton(_("keyboards.buttons.reject"), callback_data=f"reject_receipt_{invoice_id}")
+            InlineKeyboardButton(_("keyboards.buttons.approve_payment"), callback_data=f"admin_approve_{invoice_id}"),
+            InlineKeyboardButton(_("keyboards.buttons.reject"), callback_data=f"admin_reject_{invoice_id}")
         ]
     ])
 
-    num_sent = 0
+    admin_message_ids = {}
     for admin_id in config.AUTHORIZED_USER_IDS:
         try:
-            await context.bot.send_photo(chat_id=admin_id, photo=photo_file_id, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
-            num_sent += 1
+            sent_message = await context.bot.send_photo(chat_id=admin_id, photo=photo_file_id, caption=caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            admin_message_ids[admin_id] = sent_message.message_id
         except Exception as e:
             LOGGER.error(f"Failed to forward receipt for invoice #{invoice_id} to admin {admin_id}: {e}")
 
-    if num_sent > 0:
-        await update.message.reply_text(_("customer.receipt.sent_to_support_success"), reply_markup=get_customer_shop_keyboard())
-    else:
-        await update.message.reply_text(_("customer.receipt.sent_to_support_fail"), reply_markup=get_customer_shop_keyboard())
+    bot_settings = await crud_bot_setting.load_bot_settings()
+    if bot_settings.get('auto_confirm_invoices', False):
+        LOGGER.info(f"Auto-confirm is ENABLED for invoice #{invoice_id}. Scheduling job.")
+        
+        job_data = {
+            'invoice_id': invoice_id,
+            'user_id': user.id,
+            'admin_message_ids': admin_message_ids,
+            'original_caption': caption
+        }
+        
+        context.job_queue.run_once(
+            _auto_approve_callback, 
+            30, 
+            data=job_data,
+            name=f"auto_approve_{invoice_id}"
+        )
 
     context.user_data.clear()
     return ConversationHandler.END
@@ -192,4 +229,89 @@ async def cancel_receipt_upload(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data.clear()
     return ConversationHandler.END
 
-# --- END OF FILE modules/customer/actions/receipt.py ---
+async def _auto_approve_callback(context: ContextTypes.DEFAULT_TYPE):
+    job_data = context.job.data
+    invoice_id = job_data['invoice_id']
+    user_id = job_data['user_id']
+    admin_message_ids = job_data['admin_message_ids']
+    original_caption = job_data['original_caption']
+    
+    LOGGER.info(f"Executing scheduled auto-approval for invoice #{invoice_id}.")
+    
+    invoice = await crud_invoice.get_pending_invoice_by_id(invoice_id)
+    if not invoice or invoice.status != 'pending':
+        LOGGER.info(f"Auto-approval for invoice #{invoice_id} cancelled: Invoice already processed.")
+        return
+
+    # --- Create mock objects that perfectly imitate the real ones ---
+    class MockUser:
+        id = user_id
+        full_name = "Auto-Confirm System"
+    
+    class MockMessage:
+        caption = original_caption
+        async def edit_message_caption(self, caption, reply_markup=None, parse_mode=None):
+            for admin_id, message_id in admin_message_ids.items():
+                try:
+                    await context.bot.edit_message_caption(
+                        chat_id=admin_id,
+                        message_id=message_id,
+                        caption=caption,
+                        reply_markup=reply_markup,
+                        parse_mode=parse_mode
+                    )
+                except Exception as e:
+                    LOGGER.error(f"Failed to edit auto-approved message {message_id} for admin {admin_id}: {e}")
+
+    class MockCallbackQuery:
+        data = f"admin_approve_{invoice_id}"
+        message = MockMessage()
+        async def answer(self, *args, **kwargs): pass
+
+        # This method now lives directly on the mock query,
+        # exactly mirroring the real CallbackQuery object.
+        async def edit_message_caption(self, *args, **kwargs):
+            # It calls the method on its own message attribute.
+            await self.message.edit_message_caption(*args, **kwargs)
+
+    class MockUpdate:
+        effective_user = MockUser()
+        callback_query = MockCallbackQuery()
+        
+    mock_update = MockUpdate()
+
+    # --- Call the main approve_payment function ---
+    try:
+        await approve_payment(mock_update, context, auto_approved=True)
+        LOGGER.info(f"Auto-approval for invoice #{invoice_id} completed successfully.")
+
+        # --- Notification Logic ---
+        # 1. Notify Admins via private message
+        customer = await crud_user.get_user_by_id(user_id)
+        customer_name = customer.first_name if customer else f"User ID: {user_id}"
+        
+        notification_text = _("payment.auto_approved_admin_notification", 
+                              invoice_id=invoice_id, 
+                              customer_name=customer_name)
+        
+        for admin_id in config.AUTHORIZED_USER_IDS:
+            try:
+                await context.bot.send_message(chat_id=admin_id, text=notification_text)
+            except Exception as e:
+                LOGGER.error(f"Failed to send auto-approve notification to admin {admin_id}: {e}")
+
+        # 2. Send structured log to the log channel
+        customer_display_name = customer.first_name if customer else 'Unknown'
+        invoice_id_html = f"<b>#{invoice_id}</b>"
+        customer_name_html = f"<b>{html.escape(customer_display_name)}</b>"
+        customer_id_html = f"<code>{user_id}</code>"
+        
+        log_text = _("log_channel.payment_approved_auto_html",
+                     invoice_id=invoice_id_html,
+                     customer_name=customer_name_html,
+                     customer_id=customer_id_html,
+                     admin_name="Auto-Confirm System")
+        await send_log(context.bot, log_text)
+
+    except Exception as e:
+        LOGGER.error(f"An error occurred during auto-approval execution for invoice #{invoice_id}: {e}", exc_info=True)

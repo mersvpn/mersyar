@@ -8,26 +8,36 @@ import datetime
 import jdatetime
 import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes,ConversationHandler
+
 from telegram.constants import ParseMode
 from telegram.helpers import escape_markdown
-
+from shared.keyboards import get_panel_selection_keyboard
 from config import config
 from shared.keyboards import get_user_management_keyboard
 # --- MODIFIED: Import new callback type ---
 from shared.callback_types import StartManualInvoice
 from .constants import USERS_PER_PAGE, GB_IN_BYTES
-from .api import get_all_users, get_user_data
+# ✨ NEW IMPORTS FOR MULTI-PANEL ARCHITECTURE
+from typing import List, Dict, Any, Optional
+from core.panel_api.base import PanelAPI
+from core.panel_api.marzban import MarzbanPanel
+from database.crud import panel_credential as crud_panel
+from modules.marzban.actions import helpers as marzban_helpers
+from shared.translator import _
+# ---
 from modules.general.actions import start as show_main_menu_action
 from shared.auth import admin_only
+from shared import panel_utils
 
 LOGGER = logging.getLogger(__name__)
+
 
 def _pad_string(input_str: str, max_len: int) -> str:
     return input_str + ' ' * (max_len - len(input_str))
 
 def get_user_display_info(user: dict) -> tuple[str, str, bool, str, str]:
-    from shared.translator import get as get_text
+    from shared.translator import translator
     username = user.get('username', 'N/A')
     sanitized_username = username.replace('`', '')
     
@@ -37,39 +47,39 @@ def get_user_display_info(user: dict) -> tuple[str, str, bool, str, str]:
     expire_timestamp = user.get('expire')
     online_at = user.get('online_at')
 
-    prefix = get_text("marzban.marzban_display.status_active")
+    prefix = translator.get("marzban.marzban_display.status_active")
     is_online = False
-    days_left_str = get_text("marzban.marzban_display.infinite")
-    data_left_str = get_text("marzban.marzban_display.infinite")
+    days_left_str = translator.get("marzban.marzban_display.infinite")
+    data_left_str = translator.get("marzban.marzban_display.infinite")
 
     if online_at:
         try:
             online_at_dt = datetime.datetime.fromisoformat(online_at.replace("Z", "+00:00"))
             if (datetime.datetime.now(datetime.timezone.utc) - online_at_dt).total_seconds() < 180:
                 is_online = True
-                prefix = get_text("marzban.marzban_display.status_online")
+                prefix = translator.get("marzban.marzban_display.status_online")
         except (ValueError, TypeError): pass
 
     if status != 'active' or (expire_timestamp and datetime.datetime.fromtimestamp(expire_timestamp) < datetime.datetime.now()):
-        prefix = get_text("marzban.marzban_display.status_inactive")
-        days_left_str = get_text("marzban.marzban_display.expired")
+        prefix = translator.get("marzban.marzban_display.status_inactive")
+        days_left_str = translator.get("marzban.marzban_display.expired")
     else:
         is_warning = False
         if expire_timestamp:
             time_left = datetime.datetime.fromtimestamp(expire_timestamp) - datetime.datetime.now()
             days_left_val = time_left.days + (1 if time_left.seconds > 0 else 0)
-            days_left_str = get_text("marzban.marzban_display.days_left", days=days_left_val)
+            days_left_str = translator.get("marzban.marzban_display.days_left", days=days_left_val)
             if 0 < days_left_val <= 3:
                 is_warning = True
         
         if data_limit > 0:
             data_left_gb = (data_limit - used_traffic) / GB_IN_BYTES
-            data_left_str = get_text("marzban.marzban_display.data_left_gb", gb=data_left_gb)
+            data_left_str = translator.get("marzban.marzban_display.data_left_gb", gb=data_left_gb)
             if data_left_gb < 1:
                 is_warning = True
         
         if is_warning and not is_online:
-            prefix = get_text("marzban.marzban_display.status_warning")
+            prefix = translator.get("marzban.marzban_display.status_warning")
             
     return prefix, sanitized_username, is_online, days_left_str, data_left_str
 
@@ -115,37 +125,68 @@ def _get_status_emoji(user: dict) -> str:
         
     return "⚪️" # Offline but active user
 
-
 def build_users_keyboard(users: list, current_page: int, total_pages: int, list_type: str) -> InlineKeyboardMarkup:
-    """Builds a modern, three-column keyboard with a legend button."""
+    """
+    Builds a 3-column, translated keyboard for a list of users.
+    Places the "Guide" button in the center of the navigation row.
+    """
+    from shared.translator import _  # Import the translator shortcut
+
     keyboard_rows = []
     
+    # --- Create main rows with 3 user buttons per row ---
     for i in range(0, len(users), 3):
-        row = [
-            InlineKeyboardButton(
-                f"{_get_status_emoji(user)} {user.get('username', 'N/A')}",
-                callback_data=f"user_details_{user.get('username')}_{list_type}_{current_page}"
-            ) for user in users[i : i + 3]
-        ]
+        row = []
+        for user in users[i : i + 3]:
+            username = user.get('username', 'N/A')
+            panel_name = user.get('panel_name')
+            panel_emoji = "🖥️" if panel_name else ""
+            button_text = f"{_get_status_emoji(user)} {username}{panel_emoji}"
+            panel_id = user.get('panel_id', 0)
+            callback_data = f"user_details_{username}_{list_type}_{current_page}_{panel_id}"
+            row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
         keyboard_rows.append(row)
 
+    # --- Build the navigation row with translated buttons ---
     nav_row = []
-    if current_page > 1:
-        nav_row.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"show_users_page_{list_type}_{current_page - 1}"))
     
-    # Add the new Legend button to the navigation row
-    nav_row.append(InlineKeyboardButton("💡 راهنما", callback_data="show_status_legend"))
-        
-    if total_pages > 1:
-        nav_row.append(InlineKeyboardButton(f"صفحه {current_page}/{total_pages}", callback_data="noop"))
-        
-    if current_page < total_pages:
-        nav_row.append(InlineKeyboardButton("➡️ بعدی", callback_data=f"show_users_page_{list_type}_{current_page + 1}"))
+    # "Previous" button
+    if current_page > 1:
+        nav_row.append(InlineKeyboardButton(
+            _("marzban.marzban_display.keyboard_nav_previous"),
+            callback_data=f"show_users_page_{list_type}_{current_page - 1}"
+        ))
+    else:
+        # Add a placeholder to keep the layout consistent
+        nav_row.append(InlineKeyboardButton(" ", callback_data="noop"))
 
-    if nav_row:
-        keyboard_rows.append(nav_row)
+    # "Guide" button in the middle
+    nav_row.append(InlineKeyboardButton(
+        _("marzban.marzban_display.keyboard_nav_guide"),
+        callback_data="show_status_legend"
+    ))
         
-    keyboard_rows.append([InlineKeyboardButton("✖️ بستن", callback_data="close_pagination")])
+    # "Next" button
+    if current_page < total_pages:
+        nav_row.append(InlineKeyboardButton(
+            _("marzban.marzban_display.keyboard_nav_next"),
+            callback_data=f"show_users_page_{list_type}_{current_page + 1}"
+        ))
+    else:
+        # Add a placeholder
+        nav_row.append(InlineKeyboardButton(" ", callback_data="noop"))
+        
+    keyboard_rows.append(nav_row)
+
+    # --- Add page number and close button in the final row ---
+    page_text = _("marzban.marzban_display.keyboard_nav_page", current_page=current_page, total_pages=total_pages)
+    close_text = _("marzban.marzban_display.keyboard_nav_close")
+
+    final_row = [
+        InlineKeyboardButton(page_text, callback_data="noop"),
+        InlineKeyboardButton(close_text, callback_data="close_message")
+    ]
+    keyboard_rows.append(final_row)
     
     return InlineKeyboardMarkup(keyboard_rows)
 
@@ -164,67 +205,165 @@ async def show_status_legend(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     await query.answer(text=legend_text, show_alert=True)
 
+# --- ADD THESE 2 NEW FUNCTIONS to modules/marzban/actions/display.py ---
+
+async def prompt_for_panel_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Entry point for user management. Displays a keyboard for panel selection.
+    """
+    from shared.translator import translator
+    from ..handler import SELECT_PANEL # Import state from handler
+
+    # Store a map of all panel names to their IDs for the next step
+    all_panels = await crud_panel.get_all_panels()
+    if not all_panels:
+        await update.message.reply_text(translator.get("marzban.marzban_display.no_panels_configured"))
+        return ConversationHandler.END
+
+    context.user_data['panel_name_to_id_map'] = {panel.name: panel.id for panel in all_panels}
+    
+    await update.message.reply_text(
+        translator.get("marzban.marzban_display.select_panel_prompt"),
+        reply_markup=await get_panel_selection_keyboard()
+    )
+    return SELECT_PANEL
+
+async def select_panel_and_show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Handles the user's panel choice, saves it, and shows the user management menu.
+    """
+    from ..handler import USER_MENU # Import state from handler
+    panel_name = update.message.text
+    panel_map = context.user_data.get('panel_name_to_id_map', {})
+    
+    panel_id = panel_map.get(panel_name)
+    if not panel_id:
+        # If the user types something random, just show the panel selection again
+        await prompt_for_panel_selection(update, context)
+        return ConversationHandler.END # End this and let the user re-enter
+
+    # ✨ Store the selected panel ID and name for other functions to use
+    context.user_data['selected_panel_id'] = panel_id
+    context.user_data['selected_panel_name'] = panel_name
+    
+    # Now, show the actual user management menu
+    await show_user_management_menu(update, context)
+    return USER_MENU
+
 @admin_only
 async def show_user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from shared.translator import get as get_text
-    await update.message.reply_text(get_text("marzban.marzban_display.user_management_section"), reply_markup=get_user_management_keyboard())
+    from shared.translator import translator  
+    await update.message.reply_text(translator.get("marzban.marzban_display.user_management_section"), reply_markup=get_user_management_keyboard())
+
+# FILE: modules/marzban/actions/display.py
+# REPLACE THE ENTIRE _list_users_base FUNCTION WITH THIS OPTIMIZED VERSION
 
 async def _list_users_base(update: Update, context: ContextTypes.DEFAULT_TYPE, list_type: str, page: int = 1):
-    from shared.translator import get as get_text
+    from shared.translator import translator
+    import time
+
     is_callback = update.callback_query is not None
-    message = update.callback_query.message if is_callback else await update.message.reply_text(get_text("marzban.marzban_display.loading"))
+    message = update.callback_query.message if is_callback else await update.message.reply_text(translator.get("marzban.marzban_display.loading"))
     
+    # Clear search results cache if we are not in a search context
     if list_type != 'search':
         context.user_data.pop('last_search_results', None)
     
     if is_callback:
         await update.callback_query.answer()
     else:
-        await message.edit_text(get_text("marzban.marzban_display.fetching_users"))
+        await message.edit_text(translator.get("marzban.marzban_display.fetching_users"))
     
     target_users = []
     
     try:
-        if list_type == 'search':
-            title_text = get_text("marzban.marzban_display.search_results_title")
-            not_found_text = get_text("marzban.marzban_display.no_search_results")
-            target_users = context.user_data.get('last_search_results', [])
+        panel_id = context.user_data.get('selected_panel_id')
+        if not panel_id:
+            await message.edit_text(translator.get("marzban.marzban_display.no_panel_selected_error"))
+            return
+
+        # --- ✨ START OF CACHING LOGIC ---
+        CACHE_EXPIRY_SECONDS = 60  # Cache lists for 60 seconds
+        now = time.time()
+        
+        # Define cache keys based on list type and panel ID to avoid conflicts
+        users_cache_key = f'cached_users_{panel_id}_{list_type}'
+        cache_time_key = f'cache_time_{panel_id}_{list_type}'
+        
+        cached_users = context.user_data.get(users_cache_key)
+        cache_time = context.user_data.get(cache_time_key, 0)
+
+        # Check if cache is valid
+        if cached_users is not None and (now - cache_time) < CACHE_EXPIRY_SECONDS:
+            LOGGER.info(f"Using cached user list for panel {panel_id}, type '{list_type}'.")
+            target_users = cached_users
         else:
-            title_text = get_text("marzban.marzban_display.warning_list_title") if list_type == 'warning' else get_text("marzban.marzban_display.all_users_list_title")
-            not_found_text = get_text("marzban.marzban_display.no_warning_users") if list_type == 'warning' else get_text("marzban.marzban_display.no_users_in_panel")
+            LOGGER.info(f"Cache expired or not found for panel {panel_id}, type '{list_type}'. Fetching from API.")
             
-            all_users = await get_all_users()
-            if all_users is None:
-                await message.edit_text(get_text("marzban.marzban_display.panel_connection_error")); return
-            
-            if list_type == 'warning':
-                warning_users = []
-                warning_status = get_text("marzban.marzban_display.status_warning")
-                inactive_status = get_text("marzban.marzban_display.status_inactive")
-                for u in all_users:
-                    prefix, _, is_online, _, _ = get_user_display_info(u)
-                    if not is_online and prefix in [warning_status, inactive_status]:
-                        warning_users.append(u)
-                target_users = sorted(warning_users, key=lambda u: u.get('username','').lower())
+            # --- START: API Fetching Block (only runs when cache is invalid) ---
+            if list_type == 'search':
+                # Search results are handled differently and have their own cache
+                target_users = context.user_data.get('last_search_results', [])
             else:
-                target_users = sorted(all_users, key=lambda u: u.get('username','').lower())
+                panel = await crud_panel.get_panel_by_id(panel_id)
+                if not panel:
+                     await message.edit_text(translator.get("panel_manager.delete.not_found")); return
+                
+                api = await panel_utils._get_api_for_panel(panel)
+                if not api:
+                    await message.edit_text(translator.get("marzban.marzban_display.panel_connection_error")); return
+                
+                all_users = await api.get_all_users()
+                if all_users is None:
+                    await message.edit_text(translator.get("marzban.marzban_display.panel_connection_error")); return
+                
+                # Process and sort the fetched list
+                if list_type == 'warning':
+                    warning_users = []
+                    warning_status = translator.get("marzban.marzban_display.status_warning")
+                    inactive_status = translator.get("marzban.marzban_display.status_inactive")
+                    for u in all_users:
+                        prefix, _, is_online, _, _ = get_user_display_info(u)
+                        if not is_online and prefix in [warning_status, inactive_status]:
+                            warning_users.append(u)
+                    target_users = sorted(warning_users, key=lambda u: u.get('username','').lower())
+                else: # list_type == 'all'
+                    target_users = sorted(all_users, key=lambda u: u.get('username','').lower())
+
+                # Store the newly fetched and processed list in the cache
+                context.user_data[users_cache_key] = target_users
+                context.user_data[cache_time_key] = now
+            # --- END: API Fetching Block ---
+        # --- ✨ END OF CACHING LOGIC ---
+
+        # Determine titles and not-found texts
+        if list_type == 'search':
+            title_text = translator.get("marzban.marzban_display.search_results_title")
+            not_found_text = translator.get("marzban.marzban_display.no_search_results")
+        else: # 'all' or 'warning'
+            title_text = translator.get("marzban.marzban_display.warning_list_title") if list_type == 'warning' else translator.get("marzban.marzban_display.all_users_list_title")
+            not_found_text = translator.get("marzban.marzban_display.no_warning_users") if list_type == 'warning' else translator.get("marzban.marzban_display.no_users_in_panel")
 
         if not target_users:
             await message.edit_text(not_found_text); return
             
+        # --- Pagination and Display (No changes needed here) ---
         total_pages = math.ceil(len(target_users) / USERS_PER_PAGE)
         page = max(1, min(page, total_pages))
         start_index = (page - 1) * USERS_PER_PAGE
         page_users = target_users[start_index : start_index + USERS_PER_PAGE]
         
         keyboard = build_users_keyboard(page_users, page, total_pages, list_type)
-        safe_title = escape_markdown(get_text("marzban.marzban_display.page_title", title=title_text, page=page), version=2)
+        
+        panel_name = context.user_data.get('selected_panel_name', '')
+        title_with_panel = f"{title_text} ({panel_name})"
+
+        safe_title = escape_markdown(translator.get("marzban.marzban_display.page_title", title=title_with_panel, page=page), version=2)
         await message.edit_text(safe_title, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN_V2)
 
     except Exception as e:
         LOGGER.error(f"Error in _list_users_base: {e}", exc_info=True)
-        from shared.translator import get as get_text
-        await message.edit_text(get_text("marzban.marzban_display.list_display_error"))
+        await message.edit_text(translator.get("marzban.marzban_display.list_display_error"))
 
 @admin_only
 async def list_all_users_paginated(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -238,65 +377,80 @@ async def update_user_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await _list_users_base(update, context, list_type=update.callback_query.data.split('_')[-2], page=int(update.callback_query.data.split('_')[-1]))
 
 async def show_user_details_panel(context: ContextTypes.DEFAULT_TYPE, chat_id: int, username: str, list_type: str, page_number: int, success_message: str = None, message_id: int = None) -> None:
-    from shared.translator import get as get_text
-    user_info = await get_user_data(username)
+    from shared.translator import translator
+    
+    panel_id = context.user_data.get('selected_panel_id')
+    if not panel_id:
+        await context.bot.send_message(chat_id=chat_id, text=translator.get("marzban.marzban_display.no_panel_selected_error"))
+        return
+
+    panel = await crud_panel.get_panel_by_id(panel_id)
+    if not panel:
+        await context.bot.send_message(chat_id=chat_id, text=translator.get("panel_manager.delete.not_found"))
+        return
+
+    api = await panel_utils._get_api_for_panel(panel)
+    if not api:
+        await context.bot.send_message(chat_id=chat_id, text=translator.get("marzban.marzban_display.panel_connection_error"))
+        return
+
+    user_info = await api.get_user_data(username)
     if not user_info:
         if message_id:
             try:
-                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=get_text("marzban.marzban_display.user_not_found"))
+                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=translator.get("marzban.marzban_display.user_not_found"))
             except Exception:
-                await context.bot.send_message(chat_id=chat_id, text=get_text("marzban.marzban_display.user_not_found"))
+                await context.bot.send_message(chat_id=chat_id, text=translator.get("marzban.marzban_display.user_not_found"))
         return
 
-    online_status = get_text("marzban.marzban_display.offline")
+    online_status = translator.get("marzban.marzban_display.offline")
     if user_info.get('online_at'):
         try:
-            # FIX: Use strptime to match the new date format
-            online_at_dt = datetime.datetime.strptime(user_info['online_at'], "%Y-%m-%dT%H:%M:%S")
-            online_at_dt = online_at_dt.replace(tzinfo=datetime.timezone.utc)
+            online_at_dt = datetime.datetime.strptime(user_info['online_at'], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)
             if (datetime.datetime.now(datetime.timezone.utc) - online_at_dt).total_seconds() < 180:
-                online_status = get_text("marzban.marzban_display.online")
+                online_status = translator.get("marzban.marzban_display.online")
         except (ValueError, TypeError):
             pass
         
     used_gb = (user_info.get('used_traffic') or 0) / GB_IN_BYTES
     limit_gb = (user_info.get('data_limit') or 0) / GB_IN_BYTES
-    usage_str = f"{used_gb:.2f} GB / " + (f"{limit_gb:.0f} GB" if limit_gb > 0 else get_text("marzban.marzban_display.unlimited"))
+    usage_str = f"{used_gb:.2f} GB / " + (f"{limit_gb:.0f} GB" if limit_gb > 0 else translator.get("marzban.marzban_display.unlimited"))
     
-    expire_str = get_text("marzban.marzban_display.unlimited")
+    expire_str = translator.get("marzban.marzban_display.unlimited")
     if user_info.get('expire'):
         expire_dt = datetime.datetime.fromtimestamp(user_info['expire'])
         if expire_dt > datetime.datetime.now():
             jalali_date = jdatetime.datetime.fromgregorian(datetime=expire_dt)
             days_left = (expire_dt - datetime.datetime.now()).days
-            expire_str = f"{jalali_date.strftime('%Y/%m/%d')} (" + get_text("marzban.marzban_display.days_remaining", days=days_left) + ")"
+            expire_str = f"{jalali_date.strftime('%Y/%m/%d')} (" + translator.get("marzban.marzban_display.days_remaining", days=days_left) + ")"
         else:
-            expire_str = get_text("marzban.marzban_display.expired")
+            expire_str = translator.get("marzban.marzban_display.expired")
             
     message_text = ""
     if success_message:
         message_text += f"{success_message}\n{'-'*20}\n"
     
-    message_text += get_text("marzban.marzban_display.user_details_title", username=username)
-    message_text += f"{get_text('marzban.marzban_display.user_status_label')} {online_status}\n"
-    message_text += f"{get_text('marzban.marzban_display.user_usage_label')} {usage_str}\n"
-    message_text += f"{get_text('marzban.marzban_display.user_expiry_label')} `{expire_str}`"
+    message_text += translator.get("marzban.marzban_display.user_details_title", username=username)
+    message_text += f"{translator.get('marzban.marzban_display.user_status_label')} {online_status}\n"
+    message_text += f"{translator.get('marzban.marzban_display.user_usage_label')} {usage_str}\n"
+    message_text += f"{translator.get('marzban.marzban_display.user_expiry_label')} `{expire_str}`"
     
     back_button_callback = f"list_subs_page_{page_number}" if list_type == 'subs' else f"show_users_page_{list_type}_{page_number}"
-    back_button_text = get_text("marzban.marzban_display.back_to_subs_list") if list_type == 'subs' else get_text("marzban.marzban_display.back_to_users_list")
+    back_button_text = translator.get("marzban.marzban_display.back_to_subs_list") if list_type == 'subs' else translator.get("marzban.marzban_display.back_to_users_list")
     
-    # --- MODIFIED: Use StartManualInvoice for the "send invoice" button ---
-    # NOTE: customer_id is not available here, so we use 0 as a placeholder.
-    # The handler for StartManualInvoice will manage this by looking up the user in the DB.
     send_invoice_callback = StartManualInvoice(customer_id=0, username=username).to_string()
 
+    # ✅ --- START OF FIX ---
+    # The username is passed directly without any extra prefixes.
     keyboard_rows = [
-        [InlineKeyboardButton(get_text("marzban.marzban_display.button_smart_renew"), callback_data=f"renew_{username}"), InlineKeyboardButton(get_text("marzban.marzban_display.button_send_invoice"), callback_data=send_invoice_callback)],
-        [InlineKeyboardButton(get_text("marzban.marzban_display.button_add_data"), callback_data=f"add_data_{username}"), InlineKeyboardButton(get_text("marzban.marzban_display.button_add_days"), callback_data=f"add_days_{username}")],
-        [InlineKeyboardButton(get_text("marzban.marzban_display.button_reset_traffic"), callback_data=f"reset_traffic_{username}"), InlineKeyboardButton(get_text("marzban.marzban_display.button_subscription_info"), callback_data=f"note_{username}")],
-        [InlineKeyboardButton(get_text("marzban.marzban_display.button_subscription_link"), callback_data=f"sub_link_{username}"), InlineKeyboardButton(get_text("marzban.marzban_display.button_delete_user"), callback_data=f"delete_{username}")],
+        [InlineKeyboardButton(translator.get("marzban.marzban_display.button_smart_renew"), callback_data=f"renew_{username}"), InlineKeyboardButton(translator.get("marzban.marzban_display.button_send_invoice"), callback_data=send_invoice_callback)],
+        [InlineKeyboardButton(translator.get("marzban.marzban_display.button_add_data"), callback_data=f"add_data_{username}"), InlineKeyboardButton(translator.get("marzban.marzban_display.button_add_days"), callback_data=f"add_days_{username}")],
+        [InlineKeyboardButton(translator.get("marzban.marzban_display.button_reset_traffic"), callback_data=f"reset_traffic_{username}"), InlineKeyboardButton(translator.get("marzban.marzban_display.button_subscription_info"), callback_data=f"note_{username}")],
+        [InlineKeyboardButton(translator.get("marzban.marzban_display.button_subscription_link"), callback_data=f"sub_link_{username}"), InlineKeyboardButton(translator.get("marzban.marzban_display.button_delete_user"), callback_data=f"delete_{username}")],
         [InlineKeyboardButton(back_button_text, callback_data=back_button_callback)]
     ]
+    # ✅ --- END OF FIX ---
+    
     reply_markup = InlineKeyboardMarkup(keyboard_rows)
 
     if message_id:
@@ -308,23 +462,32 @@ async def show_user_details_panel(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         await context.bot.send_message(chat_id=chat_id, text=message_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
 async def show_user_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from shared.translator import get as get_text
+    from shared.translator import translator
     query = update.callback_query
     await query.answer()
     try:
-        callback_data = query.data
-        prefix_and_username, list_type, page_number_str = callback_data.rsplit('_', 2)
-        page_number = int(page_number_str)
-        username = prefix_and_username[len("user_details_"):]
+        # Callback format: user_details_{username}_{list_type}_{page_number}_{panel_id}
+        parts = query.data.split('_')
+        username = parts[2]
+        list_type = parts[3]
+        page_number = int(parts[4])
+        # panel_id is optional, for global search results
+        panel_id = int(parts[5]) if len(parts) > 5 else None
+
         if not username: raise ValueError("Extracted username is empty.")
+
+        # ✨ NEW LOGIC: If panel_id comes from the callback, store it in context
+        # This is crucial for global search to work correctly.
+        if panel_id:
+            context.user_data['selected_panel_id'] = panel_id
     except (ValueError, IndexError) as e:
         LOGGER.error(f"CRITICAL: Could not parse complex user_details callback_data '{query.data}': {e}")
-        await query.edit_message_text(get_text("marzban.marzban_display.list_display_error"))
+        await query.edit_message_text(translator.get("marzban.marzban_display.list_display_error"))
         return
     context.user_data['current_list_type'] = list_type
     context.user_data['current_page'] = page_number
     loading_message = None
-    loading_text = get_text("marzban.marzban_display.getting_details_for", username=f"`{username}`")
+    loading_text = translator.get("marzban.marzban_display.getting_details_for", username=f"`{username}`")
     if query.message.photo:
         await query.message.delete()
         loading_message = await context.bot.send_message(chat_id=query.message.chat_id, text=loading_text, parse_mode=ParseMode.MARKDOWN)
@@ -336,19 +499,10 @@ async def show_user_details(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         username=username, list_type=list_type, page_number=page_number
     )
     
-async def close_pagination_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from shared.translator import get as get_text
-    query = update.callback_query
-    await query.answer()
-    await query.message.delete()
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=get_text("marzban.marzban_display.back_to_user_management"),
-        reply_markup=get_user_management_keyboard()
-    )
+
 
 async def handle_deep_link_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from shared.translator import get as get_text
+    from shared.translator import translator
     now = time.time()
     last_call = context.user_data.get('last_deeplink_call', 0)
     if now - last_call < 2: return
@@ -360,17 +514,17 @@ async def handle_deep_link_details(update: Update, context: ContextTypes.DEFAULT
             await show_main_menu_action(update, context); return
         username = context.args[0].split('_', 1)[1]
     except (IndexError, AttributeError):
-        await update.message.reply_text(get_text("marzban.marzban_display.invalid_link"))
+        await update.message.reply_text(translator.get("marzban.marzban_display.invalid_link"))
         await show_main_menu_action(update, context)
         return
-    loading_msg = await update.message.reply_text(get_text("marzban.marzban_display.getting_details_for", username=f"`{username}`"), parse_mode=ParseMode.MARKDOWN)
+    loading_msg = await update.message.reply_text(translator.get("marzban.marzban_display.getting_details_for", username=f"`{username}`"), parse_mode=ParseMode.MARKDOWN)
     await show_user_details_panel(
         context=context, chat_id=loading_msg.chat_id, message_id=loading_msg.message_id,
         username=username, list_type='all', page_number=1
     )
 
 def format_subscription_links(user_data: dict) -> str:
-    from shared.translator import get as get_text
+    from shared.translator import translator
     links_text = ""
     subscription_url = user_data.get('subscription_url')
     if subscription_url:
@@ -383,34 +537,51 @@ def format_subscription_links(user_data: dict) -> str:
                 for i, link in enumerate(link_list, 1): links_text += f"`{link}`\n"
                 links_text += "\n"
     if not links_text:
-        return get_text("marzban.marzban_display.sub_link_not_found")
+        return translator.get("marzban.marzban_display.sub_link_not_found")
     return links_text.strip()
     
 async def send_subscription_qr_code_and_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from shared.translator import get as get_text
+    from shared.translator import translator
     query = update.callback_query
     await query.answer()
     try:
         username = query.data.split('_')[2]
     except IndexError:
-        await query.edit_message_text(get_text("marzban.marzban_display.internal_error_username_not_found"))
+        await query.edit_message_text(translator.get("marzban.marzban_display.internal_error_username_not_found"))
         return
-    user_data = await get_user_data(username)
+
+    # ✨ MODIFIED: Get user data ONLY from the selected panel
+    panel_id = context.user_data.get('selected_panel_id')
+    if not panel_id:
+        await query.edit_message_text(translator.get("marzban.marzban_display.no_panel_selected_error"))
+        return
+        
+    panel = await crud_panel.get_panel_by_id(panel_id)
+    if not panel:
+        await query.edit_message_text(translator.get("panel_manager.delete.not_found"))
+        return
+
+    api = await panel_utils._get_api_for_panel(panel)
+    if not api:
+        await query.edit_message_text(translator.get("marzban.marzban_display.panel_connection_error"))
+        return
+
+    user_data = await api.get_user_data(username)
     subscription_url = user_data.get('subscription_url')
     if not subscription_url:
-        await query.edit_message_text(text=get_text("marzban.marzban_display.link_not_found_for_user", username=f"`{username}`"), parse_mode=ParseMode.MARKDOWN)
+        await query.edit_message_text(text=translator.get("marzban.marzban_display.link_not_found_for_user", username=f"`{username}`"), parse_mode=ParseMode.MARKDOWN)
         return
     qr_image = qrcode.make(subscription_url)
     bio = io.BytesIO()
     bio.name = 'qrcode.png'
     qr_image.save(bio, 'PNG')
     bio.seek(0)
-    caption = get_text("marzban.marzban_display.qr_caption", username=f"`{username}`", url=f"`{subscription_url}`")
+    caption = translator.get("marzban.marzban_display.qr_caption", username=f"`{username}`", url=f"`{subscription_url}`")
     list_type = context.user_data.get('current_list_type', 'all')
     page_number = context.user_data.get('current_page', 1)
     back_button_callback = f"user_details_{username}_{list_type}_{page_number}"
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(get_text("marzban.marzban_display.back_to_user_details"), callback_data=back_button_callback)
+        InlineKeyboardButton(translator.get("marzban.marzban_display.back_to_user_details"), callback_data=back_button_callback)
     ]])
     await query.message.delete()
     await context.bot.send_photo(

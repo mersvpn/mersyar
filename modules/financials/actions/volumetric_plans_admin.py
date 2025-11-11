@@ -10,7 +10,7 @@ from telegram.constants import ParseMode
 from database.crud import volumetric_tier as crud_volumetric
 from database.crud import financial_setting as crud_financial
 from .settings import show_plan_management_menu
-from shared.callbacks import end_conversation_and_show_menu
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -288,7 +288,7 @@ async def execute_delete_tier(update: Update, context: ContextTypes.DEFAULT_TYPE
 edit_base_price_conv = ConversationHandler(
     entry_points=[CallbackQueryHandler(prompt_for_base_price, pattern='^vol_edit_base_price$')],
     states={GET_BASE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_new_base_price)]},
-    fallbacks=[CommandHandler('cancel', end_conversation_and_show_menu)]
+    fallbacks=[]
 )
 add_tier_conv = ConversationHandler(
     entry_points=[CallbackQueryHandler(start_add_tier, pattern='^vol_add_tier$')],
@@ -301,7 +301,7 @@ add_tier_conv = ConversationHandler(
             CallbackQueryHandler(cancel_add_tier, pattern='^vol_cancel_add$')
         ]
     },
-    fallbacks=[CommandHandler('cancel', end_conversation_and_show_menu)], conversation_timeout=600
+    fallbacks=[], conversation_timeout=600
 )
 edit_tier_conv = ConversationHandler(
     entry_points=[CallbackQueryHandler(start_edit_tier, pattern=r'^vol_edit_tier_')],
@@ -314,6 +314,6 @@ edit_tier_conv = ConversationHandler(
             CallbackQueryHandler(cancel_edit_tier, pattern='^vol_cancel_edit$')
         ]
     },
-    fallbacks=[CommandHandler('cancel', end_conversation_and_show_menu)], conversation_timeout=600
+    fallbacks=[], conversation_timeout=600
 )
 # --- END OF FILE modules/financials/actions/volumetric_plans_admin.py ---

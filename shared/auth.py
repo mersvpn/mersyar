@@ -1,4 +1,5 @@
-# FILE: shared/auth.py (REVISED TO BREAK CIRCULAR DEPENDENCY)
+# FILE: shared/auth.py 
+# --- START OF FILE ---
 
 from functools import wraps
 import logging
@@ -39,35 +40,68 @@ def admin_only_conv(func):
             return ConversationHandler.END
         return await func(update, context, *args, **kwargs)
     return wrapped
+def admin_only_callback(func):
+    """
+    Decorator to restrict access to callback query handlers to admins only.
+    Shows an alert on the callback query if the user is not authorized.
+    """
+    @wraps(func)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        query = update.callback_query
+        user = query.from_user
+        
+        if not user or not await is_admin(user.id):
+            LOGGER.warning(f"Unauthorized callback query access denied for {user.id if user else 'Unknown'} in '{func.__name__}'.")
+            # Answer the callback query with an error message to give feedback to the user
+            await query.answer(_("errors.admin_only_callback"), show_alert=True)
+            return  # Stop further execution
+            
+        # If authorized, proceed with the original function
+        return await func(update, context, *args, **kwargs)
+    return wrapped
 
 def get_admin_fallbacks():
     """
-    Returns a list of fallback handlers for admin conversations.
-    This function should be called at RUNTIME, not import time.
+    Returns a list of universal fallback handlers for all admin conversations.
+    This function should be called at RUNTIME to ensure translations are loaded.
     """
-    from shared.callbacks import admin_fallback_reroute, end_conversation_and_show_menu
+    # ✨ FIX: Import the correct, existing fallback function.
+    from shared.callbacks import main_menu_fallback
     
-    # Translate keys only when the function is called
-    admin_menu_buttons = [
+    # ✨ FIX: Create a comprehensive list of all possible main menu and "back to main menu" buttons
+    # that an admin might press to exit a conversation.
+    admin_menu_and_back_buttons = [
+        # Main Menu Buttons
         _("keyboards.admin_main_menu.manage_users"),
+        _("keyboards.admin_main_menu.search_user"),
+        _("keyboards.admin_main_menu.notes_management"),
         _("keyboards.admin_main_menu.settings_and_tools"),
-        _("keyboards.admin_main_menu.daily_notes"), # Corrected key
+        _("keyboards.admin_main_menu.customer_info"),
         _("keyboards.admin_main_menu.send_message"),
+        _("keyboards.admin_main_menu.guides_settings"),
         _("keyboards.admin_main_menu.customer_panel_view"),
-        _("keyboards.admin_main_menu.guides_settings")
+        
+        # "Back to Main Menu" buttons from various sub-menus
+        _("keyboards.user_management.back_to_main_menu"),
+        _("keyboards.settings_and_tools.back_to_main_menu"),
+        _("keyboards.notes_management.back_to_main_menu"),
+        _("keyboards.general.back_to_main_menu") # Generic back button
     ]
     
-    # Filter out any potential None values if a key is missing, although it shouldn't happen now
-    valid_buttons = [btn for btn in admin_menu_buttons if btn]
-    admin_main_menu_filter = filters.Text(valid_buttons)
+    # Filter out any potential None values if a translation key is missing
+    valid_buttons = [btn for btn in admin_menu_and_back_buttons if btn]
+    
+    # Create a single filter for all these buttons
+    main_menu_filter = filters.Text(valid_buttons)
 
+    # ✨ FIX: The fallback list is now simple and clear. Both pressing a menu button
+    # and using /cancel will trigger the same clean exit function.
     return [
-        MessageHandler(admin_main_menu_filter, admin_fallback_reroute),
-        CommandHandler('cancel', end_conversation_and_show_menu)
+        MessageHandler(main_menu_filter, main_menu_fallback),
+        CommandHandler('cancel', main_menu_fallback)
     ]
 
-# The problematic constant has been removed.
-# ADMIN_CONV_FALLBACKS = get_admin_fallbacks() # <--- THIS LINE IS DELETED
+# The rest of the file remains unchanged.
 
 def _create_join_channel_keyboard(channel_username: str) -> InlineKeyboardMarkup:
     keyboard = [

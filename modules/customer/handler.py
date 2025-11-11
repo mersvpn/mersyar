@@ -19,8 +19,8 @@ from .actions import (
     test_account as test_account_actions
 )
 
-from modules.general.actions import end_conv_and_reroute, start
-from shared.callbacks import end_conversation_and_show_menu
+
+
 from config import config
 from shared.callback_types import SendReceipt
 
@@ -50,21 +50,25 @@ def _gatekeeper(handler_func, filter_instance):
             pass
     return wrapped_handler
 
-MAIN_MENU_REGEX = r'^(🛍️فــــــــــروشـــــــــــگاه|📊ســــــــرویس‌های من|📱 راهــــــــــنمای اتصال|🔙 بازگشت به منوی اصلی)$'
+MAIN_MENU_REGEX = r'^(🛍️خرید اشتـــراک|📊ســــــــرویس‌های من|📱 راهــــــــــنمای اتصال|🔙 بازگشت به منوی اصلی)$'
+
 IGNORE_MAIN_MENU_FILTER = filters.TEXT & ~filters.COMMAND & ~filters.Regex(MAIN_MENU_REGEX)
 
 DISPLAY_PANEL = 0
 charge_actions.DISPLAY_PANEL = DISPLAY_PANEL
 
 def register(app: Application):
+    from modules.general.actions import end_conv_and_reroute, start
+    from shared.callbacks import main_menu_fallback
+    
     global application
     application = app
     LOGGER.info("Registering UNIFIED customer module handlers...")
     
     unified_fallback = [
-        MessageHandler(filters.Regex(MAIN_MENU_REGEX), end_conv_and_reroute),
-        CommandHandler('cancel', end_conversation_and_show_menu)
-    ]
+    MessageHandler(filters.Regex(MAIN_MENU_REGEX), end_conv_and_reroute),
+    CommandHandler('cancel', main_menu_fallback) # <-- CHANGE THIS LINE
+]
 
     my_service_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{re.escape(_("keyboards.customer_main_menu.my_services"))}$'), service.handle_my_service)],
@@ -114,7 +118,7 @@ def register(app: Application):
             ]
         },
         fallbacks=[
-            CallbackQueryHandler(end_conversation_and_show_menu, pattern='^cancel_conv$'),
+            CallbackQueryHandler(main_menu_fallback, pattern='^cancel_conv$'), # <-- CHANGE THIS LINE
             *unified_fallback
         ],
         conversation_timeout=600,
@@ -143,18 +147,14 @@ def register(app: Application):
 
     custom_purchase_conv = ConversationHandler(
         entry_points=[
-            # (✨ FIX) Handler for the ReplyKeyboard button, which sends text
-            MessageHandler(
-                filters.Regex(f'^{re.escape(_("keyboards.customer_shop.custom_volume_plan"))}$'), 
-                custom_purchase_actions.start_custom_purchase
-            ),
-            # Handler for the inline deeplink button
-            CallbackQueryHandler(
-                _gatekeeper(custom_purchase_actions.start_custom_purchase, not_in_builder_mode_filter), 
-                pattern=r'^shop_custom_volume$'
-            )
+            MessageHandler(filters.Regex(f'^{re.escape(_("keyboards.customer_shop.custom_volume_plan"))}$'), custom_purchase_actions.start_custom_purchase),
+            CallbackQueryHandler(_gatekeeper(custom_purchase_actions.start_custom_purchase, not_in_builder_mode_filter), pattern=r'^shop_custom_volume$')
         ],
         states={
+            # ✨ NEW STATE ADDED HERE
+            custom_purchase_actions.SELECT_PANEL: [
+                CallbackQueryHandler(custom_purchase_actions.select_panel_and_ask_username, pattern=r'^cp_select_panel_')
+            ],
             custom_purchase_actions.ASK_USERNAME: [MessageHandler(IGNORE_MAIN_MENU_FILTER, custom_purchase_actions.get_username_and_ask_volume)],
             custom_purchase_actions.ASK_VOLUME: [MessageHandler(IGNORE_MAIN_MENU_FILTER, custom_purchase_actions.get_volume_and_ask_for_duration)],
             custom_purchase_actions.ASK_DURATION: [MessageHandler(IGNORE_MAIN_MENU_FILTER, custom_purchase_actions.get_duration_and_confirm)],
@@ -168,20 +168,24 @@ def register(app: Application):
         per_message=False
     )
 
+    # ADD THIS ENTIRE BLOCK BACK
+
     unlimited_purchase_conv = ConversationHandler(
         entry_points=[
-            # (✨ FIX) Handler for the ReplyKeyboard button, which sends text
             MessageHandler(
                 filters.Regex(f'^{re.escape(_("keyboards.customer_shop.unlimited_volume_plan"))}$'), 
                 unlimited_purchase_actions.start_unlimited_purchase
             ),
-            # Handler for the inline deeplink button
             CallbackQueryHandler(
                 _gatekeeper(unlimited_purchase_actions.start_unlimited_purchase, not_in_builder_mode_filter), 
                 pattern=r'^shop_unlimited_volume$'
             )
         ],
         states={
+            # ✨ NEW STATE ADDED
+            unlimited_purchase_actions.SELECT_PANEL: [
+                CallbackQueryHandler(unlimited_purchase_actions.select_panel_and_ask_username, pattern=r'^unlim_select_panel_')
+            ],
             unlimited_purchase_actions.ASK_USERNAME: [MessageHandler(IGNORE_MAIN_MENU_FILTER, unlimited_purchase_actions.get_username_and_ask_plan)],
             unlimited_purchase_actions.CHOOSE_PLAN: [CallbackQueryHandler(unlimited_purchase_actions.select_plan_and_confirm, pattern=r'^unlim_select_')],
             unlimited_purchase_actions.CONFIRM_UNLIMITED_PLAN: [CallbackQueryHandler(unlimited_purchase_actions.generate_unlimited_invoice, pattern=r'^unlim_confirm_final$')],
@@ -192,6 +196,8 @@ def register(app: Application):
         ],
         conversation_timeout=600,
     )
+
+    # The next line should be: wallet_conv = ConversationHandler(...)
     
     wallet_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{re.escape(_("keyboards.customer_main_menu.wallet_charge"))}$'), wallet.show_wallet_panel)],

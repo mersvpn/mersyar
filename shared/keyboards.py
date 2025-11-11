@@ -1,7 +1,6 @@
-# --- START OF FILE shared/keyboards.py (REVISED AND COMPLETE) ---
 
 # FILE: shared/keyboards.py (FINAL VERSION - NAMESPACE CORRECTED)
-
+from shared.translator import translator
 from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from config import config
 from shared.translator import _
@@ -9,36 +8,74 @@ from shared.translator import _
 from database.crud import bot_setting as crud_bot_setting
 # --- ----------------- ---
 from math import ceil
+from shared.translator import translator, _
 # =============================================================================
 #  ReplyKeyboardMarkup Section
 # =============================================================================
 
 def get_admin_main_menu_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
-        # --- FIX: All keys now use the 'keyboards.' namespace ---
-        [KeyboardButton(_("keyboards.admin_main_menu.user_management"))],
-        [KeyboardButton(_("keyboards.admin_main_menu.notes_management")), KeyboardButton(_("keyboards.admin_main_menu.settings_and_tools"))],
-        [KeyboardButton(_("keyboards.admin_main_menu.customer_info"))],
-        [KeyboardButton(_("keyboards.admin_main_menu.send_message")), KeyboardButton(_("keyboards.admin_main_menu.customer_panel_view"))],
-        [KeyboardButton(_("keyboards.admin_main_menu.guides_settings"))]
+        [KeyboardButton(translator.get("keyboards.admin_main_menu.manage_users"))],
+        [KeyboardButton(translator.get("keyboards.admin_main_menu.search_user")), KeyboardButton(translator.get("keyboards.admin_main_menu.notes_management"))],
+        [KeyboardButton(translator.get("keyboards.admin_main_menu.settings_and_tools"))],
+        [KeyboardButton(translator.get("keyboards.admin_main_menu.send_message")), KeyboardButton(translator.get("keyboards.admin_main_menu.customer_panel_view"))],
+        [KeyboardButton(translator.get("keyboards.admin_main_menu.guides_settings"))]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# --- ADD THIS NEW FUNCTION to shared/keyboards.py ---
+async def get_panel_selection_keyboard() -> ReplyKeyboardMarkup:
+    """Dynamically builds a ReplyKeyboard for selecting a panel to manage."""
+    # Local import to prevent circular dependency issues
+    from database.crud import panel_credential as crud_panel
+    
+
+    all_panels = await crud_panel.get_all_panels()
+    
+    keyboard = []
+    # Create buttons for each panel, arranged 2 per row
+    it = iter(all_panels)
+    for panel1 in it:
+        row = [KeyboardButton(panel1.name)]
+        try:
+            panel2 = next(it)
+            row.append(KeyboardButton(panel2.name))
+        except StopIteration:
+            pass
+        keyboard.append(row)
+        
+    # Add the static "Back" button at the end
+    keyboard.append([KeyboardButton(translator.get("keyboards.panel_management.back_to_main_menu"))])
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# ADD THIS NEW FUNCTION
+def get_panel_type_selection_keyboard() -> InlineKeyboardMarkup:
+    """Creates the InlineKeyboardMarkup for selecting a panel type to add."""
+    keyboard = [
+        [InlineKeyboardButton("M A R Z B A N", callback_data="add_panel_type_marzban")],
+        # Add other panel types here in the future
+        # [InlineKeyboardButton("X - U I", callback_data="add_panel_type_xui")],
+        [InlineKeyboardButton(_("buttons.cancel"), callback_data="cancel_add_panel")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 
 def get_user_management_keyboard() -> ReplyKeyboardMarkup:
+    """The main keyboard for managing users of a specific, selected panel."""
+    
+
     keyboard = [
-        # --- FIX: All keys now use the 'keyboards.' namespace ---
-        [KeyboardButton(_("keyboards.user_management.show_users")), KeyboardButton(_("keyboards.user_management.expiring_users"))],
-        [KeyboardButton(_("keyboards.user_management.search_user")), KeyboardButton(_("keyboards.user_management.add_user"))],
-        [KeyboardButton(_("keyboards.user_management.back_to_main_menu"))]
+        [KeyboardButton(translator.get("keyboards.user_management.show_users")), KeyboardButton(translator.get("keyboards.user_management.expiring_users"))],
+        [KeyboardButton(translator.get("keyboards.user_management.add_user"))],
+        [KeyboardButton(translator.get("keyboards.user_management.back_to_panel_selection"))]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_settings_and_tools_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         # --- FIX: All keys now use the 'keyboards.' namespace ---
-        [KeyboardButton(_("keyboards.settings_and_tools.marzban_panel_management"))],
+        [KeyboardButton(_("keyboards.settings_and_tools.panel_management"))],
         [KeyboardButton(_("keyboards.settings_and_tools.bot_settings")), KeyboardButton(_("keyboards.settings_and_tools.financial_settings"))],
         [KeyboardButton(_("keyboards.settings_and_tools.set_log_channel"))],
         [KeyboardButton(_("keyboards.settings_and_tools.helper_tools")), KeyboardButton(_("keyboards.settings_and_tools.bot_stats"))],
@@ -48,12 +85,10 @@ def get_settings_and_tools_keyboard() -> ReplyKeyboardMarkup:
 
 def get_helper_tools_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
-        # --- FIX: All keys now use the 'keyboards.' namespace ---
-        [KeyboardButton(_("keyboards.helper_tools.daily_automation")), KeyboardButton(_("keyboards.helper_tools.set_template_user"))],
-        # (✨ NEW) Add the new button for setting the forced join channel
+
+        [KeyboardButton(_("keyboards.helper_tools.daily_automation"))],
         [KeyboardButton(_("keyboards.helper_tools.set_forced_join_channel"))],
         [KeyboardButton(_("keyboards.helper_tools.create_connect_link")), KeyboardButton(_("keyboards.helper_tools.test_account_settings"))],
-        # (✨ MODIFIED) Use a more specific back button key
         [KeyboardButton(_("keyboards.helper_tools.back_to_settings"))]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -62,21 +97,27 @@ async def get_customer_main_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     bot_settings = await crud_bot_setting.load_bot_settings()
     is_wallet_enabled = bot_settings.get('is_wallet_enabled', False)
     
-    # --- FIX: All keys now use the 'keyboards.' namespace ---
     keyboard_layout = [
-        [KeyboardButton(_("keyboards.customer_main_menu.shop"))]
+        [KeyboardButton(_("keyboards.customer_main_menu.shop"))],
+        [
+            KeyboardButton(_("keyboards.customer_main_menu.my_services")),
+            KeyboardButton(_("keyboards.customer_main_menu.test_account"))
+        ]
     ]
-    second_row = [
-        KeyboardButton(_("keyboards.customer_main_menu.my_services")),
-        KeyboardButton(_("keyboards.customer_main_menu.test_account"))
-    ]
-    keyboard_layout.append(second_row)
+    
+    # Third row: Wallet and Connection Guide
+    third_row = []
     if is_wallet_enabled:
-        keyboard_layout.append([KeyboardButton(_("keyboards.customer_main_menu.wallet_charge"))])
-    last_row = [KeyboardButton(_("keyboards.customer_main_menu.connection_guide"))]
+        third_row.append(KeyboardButton(_("keyboards.customer_main_menu.wallet_charge")))
+    
+    third_row.append(KeyboardButton(_("keyboards.customer_main_menu.connection_guide")))
+    
+    if third_row:
+        keyboard_layout.append(third_row)
+
+    # Last row for Support, if enabled
     if config.SUPPORT_USERNAME:
-        last_row.append(KeyboardButton(_("keyboards.customer_main_menu.support")))
-    keyboard_layout.append(last_row)
+        keyboard_layout.append([KeyboardButton(_("keyboards.customer_main_menu.support"))])
     
     return ReplyKeyboardMarkup(keyboard_layout, resize_keyboard=True)
 
@@ -391,3 +432,38 @@ def build_paginated_keyboard(
             keyboard.append(btn_row)
             
     return InlineKeyboardMarkup(keyboard)
+
+# --- START: Replace `get_panel_management_keyboard` in keyboards.py ---
+async def get_panel_management_keyboard() -> ReplyKeyboardMarkup:
+    """Dynamically builds a ReplyKeyboard with all panel names and control buttons."""
+    # Local import to prevent circular dependency issues at startup
+    from database.crud import panel_credential as crud_panel 
+    
+    all_panels = await crud_panel.get_all_panels()
+    
+    keyboard = []
+    # Create buttons for each panel, arranged 2 per row
+    it = iter(all_panels)
+    for panel1 in it:
+        row = [KeyboardButton(panel1.name)]
+        try:
+            panel2 = next(it)
+            row.append(KeyboardButton(panel2.name))
+        except StopIteration:
+            pass
+        keyboard.append(row)
+        
+    # Add the static control buttons at the end
+    keyboard.append([KeyboardButton(_("keyboards.panel_management.add_panel"))])
+    keyboard.append([KeyboardButton(_("keyboards.panel_management.back_to_settings"))])
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+# --- END: Replacement ---
+
+# ADD THIS to the ReplyKeyboardMarkup section
+def get_single_panel_management_keyboard() -> ReplyKeyboardMarkup:
+    keyboard = [
+        [KeyboardButton(_("keyboards.single_panel_management.connection_status")), KeyboardButton(_("keyboards.single_panel_management.delete_panel"))],
+        [KeyboardButton(_("keyboards.single_panel_management.back_to_list"))]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

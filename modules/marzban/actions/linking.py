@@ -4,7 +4,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
 
 # --- Local Imports ---
-from .api import get_user_data
+from shared.panel_utils import get_user_data_from_panels as get_user_data
 # CORRECTED: Import keyboards from the new shared location
 from shared.keyboards import get_user_management_keyboard
 from .data_manager import normalize_username

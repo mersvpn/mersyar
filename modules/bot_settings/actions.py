@@ -11,6 +11,8 @@ from shared.keyboards import (
 from .data_manager import is_bot_active, set_bot_status
 from database.crud import bot_setting as crud_bot_setting
 from shared.translator import _
+from shared.keyboards import get_settings_and_tools_keyboard
+from shared.translator import _
 
 LOGGER = logging.getLogger(__name__)
 
@@ -66,21 +68,20 @@ async def _build_and_send_main_settings_menu(update: Update, context: ContextTyp
     log_channel_is_enabled = bot_settings.get('is_log_channel_enabled', False)
     log_channel_btn_text = _("bot_settings.status_active") if log_channel_is_enabled else _("bot_settings.status_inactive")
     log_channel_callback = "toggle_log_channel_disable" if log_channel_is_enabled else "toggle_log_channel_enable"
-    
-    is_wallet_enabled = bot_settings.get('is_wallet_enabled', False)
-    wallet_btn_text = _("bot_settings.status_active") if is_wallet_enabled else _("bot_settings.status_inactive")
-    wallet_callback = "toggle_wallet_disable" if is_wallet_enabled else "toggle_wallet_enable"
+
 
     is_forced_join_enabled = bot_settings.get('is_forced_join_active', False)
     forced_join_btn_text = _("bot_settings.status_active") if is_forced_join_enabled else _("bot_settings.status_inactive")
     forced_join_callback = "toggle_forced_join_disable" if is_forced_join_enabled else "toggle_forced_join_enable"
-
+    auto_confirm_is_enabled = bot_settings.get('auto_confirm_invoices', False)
+    auto_confirm_btn_text = _("bot_settings.status_active") if auto_confirm_is_enabled else _("bot_settings.status_inactive")
+    auto_confirm_callback = "toggle_auto_confirm_disable" if auto_confirm_is_enabled else "toggle_auto_confirm_enable"
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     keyboard = [
         [InlineKeyboardButton(maintenance_btn_text, callback_data=maintenance_callback), InlineKeyboardButton(_("bot_settings.label_bot_status"), callback_data="noop")],
         [InlineKeyboardButton(log_channel_btn_text, callback_data=log_channel_callback), InlineKeyboardButton(_("bot_settings.label_log_channel"), callback_data="noop")],
-        [InlineKeyboardButton(wallet_btn_text, callback_data=wallet_callback), InlineKeyboardButton(_("bot_settings.label_wallet_status"), callback_data="noop")],
         [InlineKeyboardButton(forced_join_btn_text, callback_data=forced_join_callback), InlineKeyboardButton(_("bot_settings.label_forced_join"), callback_data="noop")],
+        [InlineKeyboardButton(auto_confirm_btn_text, callback_data=auto_confirm_callback), InlineKeyboardButton(_("bot_settings.label_auto_confirm"), callback_data="noop")],
         [InlineKeyboardButton(_("bot_settings.button_back_to_tools"), callback_data="bot_status_back")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -115,7 +116,9 @@ async def toggle_maintenance_mode(update: Update, context: ContextTypes.DEFAULT_
 
 async def toggle_log_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
+    # ✨ FIX: Determine new status directly from callback data for reliability
     new_status = (query.data == "toggle_log_channel_enable")
+
     await crud_bot_setting.save_bot_settings({"is_log_channel_enabled": new_status})
     feedback = _("bot_settings.feedback_log_channel_enabled") if new_status else _("bot_settings.feedback_log_channel_disabled")
     await query.answer(feedback, show_alert=True)
@@ -135,7 +138,9 @@ async def toggle_wallet_status(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def toggle_forced_join_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
+    # ✨ FIX: Determine new status directly from callback data for reliability
     new_status = (query.data == "toggle_forced_join_enable")
+
     await crud_bot_setting.save_bot_settings({"is_forced_join_active": new_status})
     feedback = _("bot_settings.feedback_forced_join_enabled") if new_status else _("bot_settings.feedback_forced_join_disabled")
     await query.answer(feedback, show_alert=True)
@@ -357,4 +362,37 @@ async def back_to_management_menu(update: Update, context: ContextTypes.DEFAULT_
 
     return ConversationHandler.END
 
-# --- END OF FILE modules/bot_settings/actions.py ---
+
+async def show_settings_and_tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Displays the main 'Settings & Tools' menu to the admin
+    and ends any conversation that led here.
+    """
+    from shared.keyboards import get_settings_and_tools_keyboard
+    from shared.translator import translator
+
+    # Clear user_data to prevent state leakage from previous conversations
+    context.user_data.clear()
+    
+    await update.message.reply_text(
+        translator.get("bot_settings.welcome_to_settings_and_tools"),
+        reply_markup=get_settings_and_tools_keyboard()
+    )
+    
+    # This is the crucial part that ends the conversation
+    return ConversationHandler.END
+
+# --- ADD THIS FUNCTION to the end of modules/bot_settings/actions.py ---
+async def toggle_auto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Toggles the auto-confirmation of invoices."""
+    query = update.callback_query
+    # Determine the new status based on the callback data
+    new_status = (query.data == "toggle_auto_confirm_enable")
+
+    await crud_bot_setting.save_bot_settings({"auto_confirm_invoices": new_status})
+    feedback = _("bot_settings.feedback_auto_confirm_enabled") if new_status else _("bot_settings.feedback_auto_confirm_disabled")
+    await query.answer(feedback, show_alert=True)
+    
+    # Rebuild and show the menu with the updated button
+    await _build_and_send_main_settings_menu(update, context)
+    return MENU_STATE

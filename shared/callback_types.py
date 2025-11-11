@@ -135,3 +135,9 @@ class UserInfoCallback(CallbackData):
         user_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
         param = parts[3] if len(parts) > 3 else None
         return cls(action=action, user_id=user_id, param=param)
+
+# --- Simple prefixes for handlers that don't need complex data structures ---
+
+# Used in modules/search/handler.py to identify clicks on search result buttons.
+# The format will be "search_res:username"
+SEARCH_RESULT_PREFIX = "search_res:"

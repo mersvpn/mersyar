@@ -3,14 +3,20 @@ import datetime
 import jdatetime
 import logging
 import asyncio
-
+from collections import defaultdict
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
 from config import config
 from shared.translator import _
 from shared.keyboards import get_customer_main_menu_keyboard, get_admin_main_menu_keyboard, get_back_to_main_menu_keyboard
-from modules.marzban.actions.api import get_user_data, reset_subscription_url_api
+# ✨ NEW IMPORTS FOR MULTI-PANEL ARCHITECTURE
+from typing import Optional, List, Dict, Any
+from core.panel_api.base import PanelAPI
+from core.panel_api.marzban import MarzbanPanel
+from database.crud import panel_credential as crud_panel
+from modules.marzban.actions import helpers as marzban_helpers # We will use helpers here
+# ---
 from modules.marzban.actions.constants import GB_IN_BYTES
 from modules.marzban.actions.data_manager import normalize_username
 from database.crud import marzban_link as crud_marzban_link
@@ -26,15 +32,32 @@ PROMPT_FOR_DATA_AMOUNT, CONFIRM_DATA_PURCHASE = range(4, 6)
 ITEMS_PER_PAGE = 8
 
 
+async def _get_api_for_panel(panel) -> Optional[PanelAPI]:
+    """Factory to create an API object from a panel DB object."""
+    if panel.panel_type.value == "marzban":
+        credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
+        return MarzbanPanel(credentials)
+    return None
+async def _get_api_for_user(marzban_username: str) -> Optional[PanelAPI]:
+    """Finds which panel a user belongs to and returns an API object for it."""
+    link = await crud_marzban_link.get_link_with_panel_by_username(marzban_username)
+    if not link or not link.panel:
+        LOGGER.error(f"Could not find a panel for user '{marzban_username}'.")
+        return None
+    
+    panel = link.panel
+    if panel.panel_type.value == "marzban":
+        credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
+        return MarzbanPanel(credentials)
+    return None
+
 async def _build_paginated_service_keyboard(services: list, page: int = 0) -> InlineKeyboardMarkup:
     start_index = page * ITEMS_PER_PAGE
     end_index = start_index + ITEMS_PER_PAGE
     keyboard = []
     for user in services[start_index:end_index]:
-        if user.get('status') == 'active':
-            button_text = _("keyboards.buttons.service_status_active", username=user['username'])
-        else:
-            button_text = _("keyboards.buttons.service_status_inactive", username=user['username'])
+        status_icon = "🟢" if user.get('status') == 'active' else "🔴"
+        button_text = f"{status_icon} {user['username']}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"select_service_{user['username']}")])
     nav_buttons = []
     total_pages = (len(services) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
@@ -64,55 +87,83 @@ async def handle_service_page_change(update: Update, context: ContextTypes.DEFAU
     return CHOOSE_SERVICE
 
 
-# (✨ FINAL REPLACEMENT for handle_my_service)
 async def handle_my_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     query = update.callback_query
     
     if query:
         await query.answer()
-        await query.message.delete()
+        try: await query.message.delete()
+        except Exception: pass
         loading_message = await context.bot.send_message(user_id, _("customer.customer_service.loading"))
     else:
         loading_message = await update.message.reply_text(_("customer.customer_service.loading"))
 
     try:
-        linked_usernames_raw = await crud_marzban_link.get_linked_marzban_usernames(user_id)
-        if not linked_usernames_raw:
+        links = await crud_marzban_link.get_links_by_telegram_id_with_panel(user_id)
+        if not links:
             await loading_message.edit_text(_("customer.customer_service.no_service_linked"))
             return ConversationHandler.END
 
-        tasks = [get_user_data(username) for username in linked_usernames_raw]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Group user links by panel to minimize API calls
+        links_by_panel = defaultdict(list)
+        for link in links:
+            if link.panel:
+                links_by_panel[link.panel].append(link.marzban_username)
 
-        valid_accounts, dead_links = [], []
-        for i, res in enumerate(results):
-            if isinstance(res, dict) and "error" not in res and res is not None:
-                valid_accounts.append(res)
-            else:
-                dead_links.append(normalize_username(linked_usernames_raw[i]))
+        valid_accounts = []
+        all_user_links = {link.marzban_username for link in links}
+
+        async def fetch_panel_data(panel, usernames):
+            api = await _get_api_for_panel(panel)
+            if not api: return []
+            
+            # Fetch all users from the panel once
+            all_panel_users_data = await api.get_all_users()
+            if not all_panel_users_data: return []
+
+            # Create a dictionary for quick lookups
+            users_dict = {user['username']: user for user in all_panel_users_data}
+
+            # Filter out the data for the specific user's services
+            found_users = []
+            for username in usernames:
+                if username in users_dict:
+                    user_data = users_dict[username]
+                    user_data['panel_name'] = panel.name
+                    user_data['panel_id'] = panel.id
+                    found_users.append(user_data)
+            return found_users
+
+        tasks = [fetch_panel_data(panel, usernames) for panel, usernames in links_by_panel.items()]
+        results = await asyncio.gather(*tasks)
         
-        if dead_links:
-            LOGGER.info(f"Cleaning up {len(dead_links)} dead links for user {user_id}: {dead_links}")
-            await asyncio.gather(*[crud_marzban_link.delete_marzban_link(d) for d in dead_links])
+        for user_list in results:
+            valid_accounts.extend(user_list)
+        
+        found_usernames = {acc['username'] for acc in valid_accounts}
+        dead_links_usernames = all_user_links - found_usernames
+
+        if dead_links_usernames:
+            LOGGER.info(f"Cleaning up {len(dead_links_usernames)} dead links for user {user_id}: {dead_links_usernames}")
+            for username in dead_links_usernames:
+                await crud_marzban_link.delete_marzban_link(username)
         
         if not valid_accounts:
             await loading_message.edit_text(_("customer.customer_service.no_valid_service_found"))
             return ConversationHandler.END
 
+        # Filter out test accounts
         note_tasks = [crud_user_note.get_user_note(acc['username']) for acc in valid_accounts]
         notes = await asyncio.gather(*note_tasks)
-        
         final_accounts = [acc for i, acc in enumerate(valid_accounts) if not (notes[i] and notes[i].is_test_account)]
         
         if not final_accounts:
             await loading_message.edit_text(_("customer.customer_service.no_valid_service_found"))
             return ConversationHandler.END
         
-        # If only one service exists, display it directly and set the state.
         if len(final_accounts) == 1:
             return await display_service_details(user_id, loading_message, context, final_accounts[0]['username'])
-        # If multiple services exist, show the list and set the state.
         else:
             sorted_services = sorted(final_accounts, key=lambda u: u['username'].lower())
             context.user_data['services_list'] = sorted_services
@@ -126,9 +177,11 @@ async def handle_my_service(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return ConversationHandler.END
 
 
+
 async def display_service_details(user_id: int, message_to_edit, context: ContextTypes.DEFAULT_TYPE, marzban_username: str) -> int:
     await message_to_edit.edit_text(text=_("customer.customer_service.getting_service_info", username=marzban_username))
-    user_info = await get_user_data(marzban_username)
+    api = await _get_api_for_user(marzban_username)
+    user_info = await api.get_user_data(marzban_username) if api else None
 
     if not user_info or "error" in user_info:
         await message_to_edit.edit_text(_("customer.customer_service.service_not_found_in_panel"))
@@ -273,7 +326,8 @@ async def execute_reset_subscription(update: Update, context: ContextTypes.DEFAU
         await query.edit_message_text(_("general.errors.username_not_found"))
         return ConversationHandler.END
     await query.edit_message_text(_("customer.customer_service.resetting_sub_link", username=f"`{username}`"))
-    success, result = await reset_subscription_url_api(username)
+    api = await _get_api_for_user(username)
+    success, result = (await api.revoke_subscription(username)) if api else (False, "Panel not found")
     if success:
         new_sub_url = result.get('subscription_url', _("customer.customer_service.not_found"))
         text = _("customer.customer_service.reset_sub_successful", sub_url=new_sub_url)

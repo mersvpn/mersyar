@@ -4,10 +4,12 @@ from telegram.ext import (
     Application, ConversationHandler, MessageHandler,
     filters, CallbackQueryHandler, CommandHandler
 )
+import logging
 from shared.auth import admin_only_conv, admin_only
 from shared.keyboards import get_settings_and_tools_keyboard, get_helper_tools_keyboard
 from .actions import (
-    start_bot_settings, toggle_maintenance_mode, toggle_log_channel, toggle_wallet_status,
+    start_bot_settings, toggle_maintenance_mode, toggle_log_channel,show_settings_and_tools_menu,
+    toggle_auto_confirm,
     prompt_for_channel_id, process_channel_id, MENU_STATE, SET_CHANNEL_ID,
     toggle_forced_join_status, prompt_for_forced_join_channel, process_forced_join_channel,
     GET_FORCED_JOIN_CHANNEL,
@@ -19,14 +21,10 @@ from .actions import (
 )
 from shared.translator import _
 
-# (✨ FIX) Renamed the function to be more descriptive and avoid conflicts
-async def show_admin_settings_and_tools_menu(update, context):
-    await update.message.reply_text(
-        _("bot_settings.welcome_to_settings_and_tools"),
-        reply_markup=get_settings_and_tools_keyboard()
-    )
+
 
 def register(application: Application) -> None:
+    logging.critical("!!!!!! [TRACE] BOT_SETTINGS HANDLER is being registered. !!!!!!")
     # (✨ FIX) Define a consistent group for admin main menu handlers to ensure correct priority.
     ADMIN_MAIN_MENU_GROUP = 0
 
@@ -37,8 +35,8 @@ def register(application: Application) -> None:
             MENU_STATE: [
                 CallbackQueryHandler(toggle_maintenance_mode, pattern=r'^toggle_maintenance_'),
                 CallbackQueryHandler(toggle_log_channel, pattern=r'^toggle_log_channel_'),
-                CallbackQueryHandler(toggle_wallet_status, pattern=r'^toggle_wallet_'),
                 CallbackQueryHandler(toggle_forced_join_status, pattern=r'^toggle_forced_join_'),
+                CallbackQueryHandler(toggle_auto_confirm, pattern=r'^toggle_auto_confirm_'),
             ]
         },
         fallbacks=[
@@ -106,7 +104,7 @@ def register(application: Application) -> None:
     # Register all handlers
     # Using the same group ensures they are processed in the order they are added.
     # This prevents general handlers from capturing input before specific ones.
-    application.add_handler(MessageHandler(filters.Regex(f'^{_("admin_main_menu.settings_and_tools")}$'), admin_only(show_admin_settings_and_tools_menu)), group=ADMIN_MAIN_MENU_GROUP)
+    application.add_handler(MessageHandler(filters.Regex(f'^{_("admin_main_menu.settings_and_tools")}$'), admin_only(show_settings_and_tools_menu)), group=ADMIN_MAIN_MENU_GROUP)
     application.add_handler(bot_settings_conv, group=ADMIN_MAIN_MENU_GROUP)
     application.add_handler(channel_id_conv, group=ADMIN_MAIN_MENU_GROUP)
     application.add_handler(test_account_conv, group=ADMIN_MAIN_MENU_GROUP)

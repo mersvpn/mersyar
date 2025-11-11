@@ -24,8 +24,8 @@ def register(application: Application):
 
     handlers = [
         # Approval/Rejection Handlers
-        CallbackQueryHandler(approve_payment, pattern=r'^approve_receipt_'),
-        CallbackQueryHandler(reject_payment, pattern=r'^reject_receipt_'),
+        CallbackQueryHandler(approve_payment, pattern=r'^admin_approve_'),
+        CallbackQueryHandler(reject_payment, pattern=r'^admin_reject_'),
         CallbackQueryHandler(confirm_manual_payment, pattern=r'^confirm_manual_receipt_'),
         CallbackQueryHandler(approve_payment, pattern=r'^approve_data_top_up_'),
 

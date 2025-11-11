@@ -10,7 +10,7 @@ from telegram.constants import ParseMode
 from database.crud import financial_setting as crud_financial
 from database.crud import bot_setting as crud_bot_setting
 from shared.keyboards import get_financial_settings_keyboard, get_payment_methods_keyboard, get_plan_management_keyboard
-from shared.callbacks import end_conversation_and_show_menu
+
 from shared.auth import admin_only
 
 LOGGER = logging.getLogger(__name__)
@@ -149,6 +149,7 @@ async def prompt_for_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def save_financial_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    from modules.general.actions import end_conversation_and_show_menu
     from shared.translator import _
     action = context.user_data.get('financial_action')
     new_value = update.message.text.strip()
@@ -185,7 +186,7 @@ card_settings_conv = ConversationHandler(
         EDITING_HOLDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_financial_info)],
         EDITING_CARD: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_financial_info)],
     },
-    fallbacks=[CommandHandler('cancel', end_conversation_and_show_menu)],
+    fallbacks=[],
     conversation_timeout=300, block=False
 )
 
@@ -232,6 +233,7 @@ async def prompt_for_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def save_new_plan_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    from modules.general.actions import end_conversation_and_show_menu
     from shared.translator import _
     new_name = update.message.text.strip()
     action = context.user_data.pop('plan_name_to_edit', None)
@@ -259,7 +261,7 @@ plan_name_settings_conv = ConversationHandler(
         EDITING_VOLUMETRIC_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_new_plan_name)],
         EDITING_UNLIMITED_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_new_plan_name)],
     },
-    fallbacks=[CommandHandler('cancel', end_conversation_and_show_menu)],
+    fallbacks=[],
     conversation_timeout=300
 )
 

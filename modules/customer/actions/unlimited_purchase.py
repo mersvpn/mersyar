@@ -14,55 +14,102 @@ from telegram.constants import ParseMode
 from database.crud import unlimited_plan as crud_unlimited_plan
 from modules.payment.actions.creation import create_and_send_invoice
 from shared.keyboards import get_back_to_main_menu_keyboard, get_customer_shop_keyboard
-from modules.marzban.actions.api import get_user_data
+
 from modules.marzban.actions.data_manager import normalize_username
 from modules.general.actions import end_conv_and_reroute
 from shared.translator import _
-
+# ✨ NEW IMPORTS FOR MULTI-PANEL ARCHITECTURE
+from typing import Optional, Dict, Any
+from core.panel_api.marzban import MarzbanPanel
+from database.crud import panel_credential as crud_panel
+# ---
 LOGGER = logging.getLogger(__name__)
 
-ASK_USERNAME, CHOOSE_PLAN, CONFIRM_UNLIMITED_PLAN = range(3)
+# ✨ MODIFIED IMPORTS AND STATES
+from typing import Optional, Dict, Any
+from core.panel_api.marzban import MarzbanPanel
+from database.crud import panel_credential as crud_panel
+
+SELECT_PANEL, ASK_USERNAME, CHOOSE_PLAN, CONFIRM_UNLIMITED_PLAN = range(4)
+
 USERNAME_PATTERN = r"^[a-zA-Z0-9_]{5,20}$"
 CANCEL_CALLBACK_DATA = "cancel_unlimited_plan"
 
 def _get_cancel_button() -> InlineKeyboardButton:
     return InlineKeyboardButton(_("buttons.cancel_and_back_to_shop"), callback_data=CANCEL_CALLBACK_DATA)
 
+async def _get_user_from_all_panels(username: str) -> Optional[Dict[str, Any]]:
+    """Checks for a user's existence across all panels."""
+    all_panels = await crud_panel.get_all_panels()
+    for panel in all_panels:
+        if panel.panel_type.value == "marzban":
+            credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
+            api = MarzbanPanel(credentials)
+            user_data = await api.get_user_data(username)
+            if user_data:
+                return user_data
+    return None
+
+async def _build_panel_selection_keyboard() -> Optional[InlineKeyboardMarkup]:
+    """Builds an inline keyboard for active panel selection by customers."""
+    panels = await crud_panel.get_all_panels()
+    if not panels:
+        return None
+    keyboard = [[InlineKeyboardButton(p.name, callback_data=f"unlim_select_panel_{p.id}")] for p in panels]
+    keyboard.append([_get_cancel_button()])
+    return InlineKeyboardMarkup(keyboard)
+
+async def _get_user_from_all_panels(username: str) -> Optional[Dict[str, Any]]:
+    """Checks for a user's existence across all panels."""
+    all_panels = await crud_panel.get_all_panels()
+    for panel in all_panels:
+        if panel.panel_type.value == "marzban":
+            credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
+            api = MarzbanPanel(credentials)
+            user_data = await api.get_user_data(username)
+            if user_data:
+                return user_data
+    return None
 
 async def start_unlimited_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id if update.effective_user else "Unknown"
-    trigger_type = "CallbackQuery" if update.callback_query else "Message"
-    trigger_data = update.callback_query.data if update.callback_query else update.message.text
-    
-    LOGGER.info(f"[DIAGNOSTIC] Customer's 'start_unlimited_purchase' triggered for user {user_id}. Type: {trigger_type}, Data: '{trigger_data}'")
-    
     context.user_data.clear()
-    text = _("unlimited_purchase.step1_ask_username")
     
-    chat_id = update.effective_chat.id
-    target_message = update.callback_query.message if update.callback_query else update.message
+    keyboard = await _build_panel_selection_keyboard()
+    if not keyboard:
+        await update.effective_message.reply_text(_("panel_manager.add.no_panels_configured"), reply_markup=get_customer_shop_keyboard())
+        return ConversationHandler.END
 
+    text = _("unlimited_purchase.step0_ask_panel")
+    
     if update.callback_query:
         await update.callback_query.answer()
-        
-        try:
-            await target_message.delete()
-        except Exception as e:
-            LOGGER.warning(f"Could not delete the source message for deeplink purchase: {e}")
-        
-        await context.bot.send_message(
-            chat_id=chat_id, 
-            text=text, 
-            parse_mode=ParseMode.MARKDOWN, 
-            reply_markup=get_back_to_main_menu_keyboard()
-        )
+        await update.effective_message.edit_text(text, reply_markup=keyboard)
     else:
-        await target_message.reply_text(
-            text=text, 
-            parse_mode=ParseMode.MARKDOWN, 
-            reply_markup=get_back_to_main_menu_keyboard()
-        )
+        await update.effective_message.reply_text(text, reply_markup=keyboard)
 
+    return SELECT_PANEL
+
+async def select_panel_and_ask_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Stores the selected panel and asks for the username with a formatted message."""
+    query = update.callback_query
+    await query.answer()
+    
+    panel_id = int(query.data.split('_')[-1])
+    context.user_data['unlimited_plan'] = {'panel_id': panel_id}
+
+    text = (
+        f"💎 <b>{_('unlimited_purchase.title')}</b>\n\n"
+        f"{_('unlimited_purchase.step1_ask_username_v2')}\n\n"
+        f"❗️ <b>{_('custom_purchase.username_rules_title')}</b>\n"
+        f"▪️ {_('custom_purchase.username_rule_length', min=5, max=20)}\n"
+        f"▪️ {_('custom_purchase.username_rule_chars')}\n"
+        f"▪️ {_('custom_purchase.username_rule_no_space')}\n\n"
+        f"{_('custom_purchase.cancel_instruction')}"
+    )
+
+    keyboard = InlineKeyboardMarkup([[_get_cancel_button()]])
+    await query.edit_message_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
+    
     return ASK_USERNAME
 
 async def get_username_and_ask_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -72,12 +119,13 @@ async def get_username_and_ask_plan(update: Update, context: ContextTypes.DEFAUL
         return ASK_USERNAME
 
     username_to_check = normalize_username(username_input)
-    existing_user = await get_user_data(username_to_check)
+    existing_user = await _get_user_from_all_panels(username_to_check)
     if existing_user and "error" not in existing_user:
         await update.message.reply_text(_("custom_purchase.username_taken"))
         return ASK_USERNAME
 
-    context.user_data['unlimited_plan'] = {'username': username_to_check}
+    existing_user = await _get_user_from_all_panels(username_to_check)
+    context.user_data['unlimited_plan']['username'] = username_to_check
     active_plans = await crud_unlimited_plan.get_active_unlimited_plans()
     if not active_plans:
         await update.message.reply_text(_("unlimited_purchase.no_plans_available"), reply_markup=get_customer_shop_keyboard())
@@ -89,8 +137,8 @@ async def get_username_and_ask_plan(update: Update, context: ContextTypes.DEFAUL
     ]
     keyboard_rows.append([_get_cancel_button()])
     
-    text = _("unlimited_purchase.step2_ask_plan", username=f"`{username_to_check}`")
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard_rows), parse_mode=ParseMode.MARKDOWN)
+    text = _("unlimited_purchase.step2_ask_plan", username=username_to_check)
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard_rows), parse_mode=ParseMode.HTML)
     return CHOOSE_PLAN
 
 async def select_plan_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -121,7 +169,7 @@ async def select_plan_and_confirm(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton(_("buttons.confirm_and_get_invoice"), callback_data="unlim_confirm_final")],
         [_get_cancel_button()]
     ]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
     return CONFIRM_UNLIMITED_PLAN
 
 async def generate_unlimited_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -153,6 +201,7 @@ async def generate_unlimited_invoice(update: Update, context: ContextTypes.DEFAU
         "plan_name": plan_data['plan_name'],
         "max_ips": plan_data['max_ips'],
         "price": plan_data['price'],
+        "panel_id": plan_data.get('panel_id'),
         "duration": 30, # Also add duration to invoice details for display
         "volume": 0
     }

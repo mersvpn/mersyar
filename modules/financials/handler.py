@@ -1,4 +1,4 @@
-# FILE: modules/financials/handler.py (REVISED TO BREAK CIRCULAR DEPENDENCY)
+# FILE: modules/financials/handler.py (نسخه نهایی و کاملاً اصلاح شده)
 
 import logging
 from telegram.ext import (
@@ -21,9 +21,8 @@ from .actions import (
     balance_management,
     gift
 )
-# --- FIX: Import the function, not the constant ---
-from shared.callbacks import show_coming_soon, end_conversation_and_show_menu, admin_fallback_reroute
-from shared.auth import get_admin_fallbacks # <--- KEY CHANGE
+from shared.callbacks import show_coming_soon
+from shared.auth import get_admin_fallbacks
 
 LOGGER = logging.getLogger(__name__)
 
@@ -31,19 +30,23 @@ def register(application: Application):
     """
     Registers handlers for the ADMIN financial settings panel.
     """
+    from shared.callbacks import main_menu_fallback # <-- FIX 1: Import correct function
+    
     LOGGER.info("Registering financials settings module handlers...")
     
-    # --- FIX: Call the function at runtime to get the fallbacks ---
-    admin_fallbacks = get_admin_fallbacks()
+    # We use main_menu_fallback as the universal cancel command handler
+    cancel_fallback = [CommandHandler('cancel', main_menu_fallback)]
 
-    # --- Extend other Conversation Handlers with Shared Fallbacks ---
-    card_settings_conv.fallbacks.extend(admin_fallbacks)
-    plan_name_settings_conv.fallbacks.extend(admin_fallbacks)
-    unlimited_plans_admin.add_unlimited_plan_conv.fallbacks.extend(admin_fallbacks)
-    volumetric_plans_admin.edit_base_price_conv.fallbacks.extend(admin_fallbacks)
-    volumetric_plans_admin.add_tier_conv.fallbacks.extend(admin_fallbacks)
-    volumetric_plans_admin.edit_tier_conv.fallbacks.extend(admin_fallbacks)
-    wallet_admin.edit_amounts_conv.fallbacks.extend(admin_fallbacks)
+    # --- Attaching fallbacks to imported ConversationHandlers ---
+    # These handlers were defined in other files with fallbacks=[]
+    card_settings_conv.fallbacks.extend(cancel_fallback)
+    plan_name_settings_conv.fallbacks.extend(cancel_fallback)
+    unlimited_plans_admin.add_unlimited_plan_conv.fallbacks.extend(cancel_fallback)
+    volumetric_plans_admin.edit_base_price_conv.fallbacks.extend(cancel_fallback)
+    volumetric_plans_admin.add_tier_conv.fallbacks.extend(cancel_fallback)
+    volumetric_plans_admin.edit_tier_conv.fallbacks.extend(cancel_fallback)
+    wallet_admin.edit_amounts_conv.fallbacks.extend(cancel_fallback)
+    # Note: We are ignoring get_admin_fallbacks() for simplicity and consistency
 
     # --- Conversation Handler for Balance Management ---
     balance_management_conv = ConversationHandler(
@@ -63,8 +66,7 @@ def register(application: Application):
                 CallbackQueryHandler(balance_management.show_user_balance_menu, pattern=r'^back_to_user_menu_from_amount$')
             ],
         },
-        # --- FIX: Use the runtime-generated fallbacks ---
-        fallbacks=get_admin_fallbacks(),
+        fallbacks=cancel_fallback,
     )
 
     # --- Conversation Handlers for Gift Management ---
@@ -73,7 +75,7 @@ def register(application: Application):
         states={
             gift.GET_WELCOME_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift.save_welcome_gift)]
         },
-        fallbacks=[CommandHandler('cancel', end_conversation_and_show_menu)],
+        fallbacks=[CommandHandler('cancel', main_menu_fallback)],
         conversation_timeout=300,
         map_to_parent={
             ConversationHandler.END: gift.MENU
@@ -86,7 +88,7 @@ def register(application: Application):
             gift.GET_UNIVERSAL_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift.prompt_for_gift_confirmation)],
             gift.CONFIRM_UNIVERSAL_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift.process_universal_gift)]
         },
-        fallbacks=[CommandHandler('cancel', end_conversation_and_show_menu)],
+        fallbacks=[CommandHandler('cancel', main_menu_fallback)],
         conversation_timeout=300,
         map_to_parent={
             ConversationHandler.END: gift.MENU
@@ -102,7 +104,7 @@ def register(application: Application):
                 CallbackQueryHandler(show_financial_menu, pattern='^back_to_financial_settings$')
             ]
         },
-        fallbacks=[CommandHandler('cancel', end_conversation_and_show_menu)],
+        fallbacks=[CommandHandler('cancel', main_menu_fallback)],
         conversation_timeout=600,
         allow_reentry=True
     )

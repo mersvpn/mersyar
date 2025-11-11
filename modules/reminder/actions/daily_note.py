@@ -8,7 +8,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 from telegram.helpers import escape_markdown
-from shared.callbacks import end_conversation_and_show_menu
+
 from database.crud import admin_daily_note as crud_daily_note
 from shared.keyboards import get_settings_and_tools_keyboard
 
@@ -236,8 +236,7 @@ daily_notes_conv = ConversationHandler(
         EDIT_GET_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_save)],
     },
     fallbacks=[
-        CommandHandler('cancel', end_conversation_and_show_menu),
-        CallbackQueryHandler(end_conversation_and_show_menu, pattern='^cancel_conv$')
+
     ],
     conversation_timeout=600,
     per_user=True,

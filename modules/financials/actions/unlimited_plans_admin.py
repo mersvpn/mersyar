@@ -1,4 +1,6 @@
-# --- START OF FILE modules/financials/actions/unlimited_plans_admin.py ---
+# FILE: modules/financials/actions/unlimited_plans_admin.py (نسخه اصلاح شده)
+# --- START OF FILE ---
+
 import html
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -10,7 +12,7 @@ from telegram.constants import ParseMode
 
 from database.crud import unlimited_plan as crud_unlimited_plan
 from .settings import show_plan_management_menu
-from shared.callbacks import end_conversation_and_show_menu
+# ✨ FIX: The problematic import line that caused the crash has been removed from here.
 
 LOGGER = logging.getLogger(__name__)
 
@@ -213,8 +215,8 @@ add_unlimited_plan_conv = ConversationHandler(
             CallbackQueryHandler(cancel_add_plan, pattern='^unlimplan_cancel_add$')
         ]
     },
-    fallbacks=[CommandHandler('cancel', end_conversation_and_show_menu)],
+    fallbacks=[],
     conversation_timeout=600
 )
 
-# --- END OF FILE modules/financials/actions/unlimited_plans_admin.py ---
+# --- END OF FILE ---

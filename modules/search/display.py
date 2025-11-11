@@ -11,7 +11,7 @@ from database.crud import marzban_link as crud_marzban_link
 from shared.keyboards import get_admin_main_menu_keyboard
 from shared.callback_types import UserInfoCallback
 from shared.translator import _
-from modules.marzban.actions import api as marzban_api
+from shared import panel_utils
 from telegram.helpers import escape_markdown
 
 LOGGER = logging.getLogger(__name__)
@@ -29,21 +29,36 @@ async def start_customer_info(update: Update, context: ContextTypes.DEFAULT_TYPE
     return AWAIT_USER_ID
 
 async def process_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_input = update.message.text.strip()
-    if not user_input.isdigit():
-        await update.message.reply_text(_("user_info.prompts.invalid_user_id"))
-        return AWAIT_USER_ID
+    """
+    Processes a user ID, either from a message or from context.user_data,
+    and displays the main management menu for that user.
+    """
+    target_user_id = context.user_data.get('target_user_id')
     
-    target_user_id = int(user_input)
+    # If the ID was not passed via context (e.g., from search), get it from the user's message.
+    if not target_user_id:
+        user_input = update.message.text.strip()
+        if not user_input.isdigit():
+            await update.message.reply_text(_("user_info.prompts.invalid_user_id"))
+            return AWAIT_USER_ID
+        target_user_id = int(user_input)
+    
     user_data = await crud_user.get_user_with_relations(target_user_id)
     
     if not user_data:
-        await update.message.reply_text(
-            _("user_info.prompts.user_not_found", user_id=target_user_id),
-            parse_mode=ParseMode.MARKDOWN
-        )
+        message_text = _("user_info.prompts.user_not_found", user_id=target_user_id)
+        # If the call came from the search module, we don't need the big keyboard.
+        if 'target_user_id' in context.user_data:
+            await context.bot.send_message(update.effective_chat.id, message_text, parse_mode=ParseMode.MARKDOWN)
+            # We need to explicitly re-enter the search prompt.
+            # A better approach is to let search handle this, which it now does.
+            # This return is for the user_info conversation context.
+            return AWAIT_USER_ID
+        else:
+            await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
         return AWAIT_USER_ID
     
+    # At this point, we have a valid target_user_id, so save it to context
     context.user_data['target_user_id'] = target_user_id
     
     user_name = user_data.first_name or "N/A"
@@ -51,33 +66,22 @@ async def process_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     menu_keyboard = ReplyKeyboardMarkup(
     [
-        [
-            KeyboardButton(_("user_info.menu.user_profile"))
-            
-        ],
-        [
-            KeyboardButton(_("user_info.menu.services")),
-            KeyboardButton(_("user_info.menu.note_management"))
-        ],
-        [
-            KeyboardButton(_("user_info.menu.back_to_main"))
-        ]
+        [KeyboardButton(_("user_info.menu.user_profile"))],
+        [KeyboardButton(_("user_info.menu.services")), KeyboardButton(_("user_info.menu.note_management"))],
+        [KeyboardButton(_("user_info.menu.back_to_main"))]
     ],
     resize_keyboard=True
 )
     
-    await update.message.reply_text(
-        _("user_info.prompts.user_header", name=user_name, username=user_username, user_id=target_user_id),
+    # Send a new message to ensure the correct keyboard is displayed
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=_("user_info.prompts.user_header", name=user_name, username=user_username, user_id=target_user_id),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=menu_keyboard
     )
     
     return MAIN_MENU
-
-
-# FILE: modules/user_info/actions/display.py
-
-# FILE: modules/user_info/actions/display.py
 
 async def show_comprehensive_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     target_user_id = context.user_data.get('target_user_id')
@@ -158,7 +162,7 @@ async def show_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         active_services_text = []
         expired_services_text = []
         
-        tasks = [marzban_api.get_user_data(link.marzban_username) for link in links]
+        tasks = [panel_utils.get_user_from_any_panel(link.marzban_username) for link in links]
         user_details_list = await asyncio.gather(*tasks)
 
         for user_detail in user_details_list:
@@ -338,3 +342,41 @@ async def close_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         del context.user_data['editing_note_for']
     
     return ConversationHandler.END
+
+# --- ADD THIS NEW FUNCTION to the end of modules/user_info/actions/display.py ---
+
+async def display_user_info_action(update: Update, context: ContextTypes.DEFAULT_TYPE, telegram_id: int):
+    """
+    A wrapper action to display user info, callable from other modules.
+    It simulates the user entering an ID.
+    """
+    user_data = await crud_user.get_user_with_relations(telegram_id)
+    
+    if not user_data:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=_("user_info.prompts.user_not_found", user_id=telegram_id),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    context.user_data['target_user_id'] = telegram_id
+    
+    user_name = user_data.first_name or "N/A"
+    user_username = f"@{user_data.username}" if user_data.username else _("user_info.profile.no_username")
+    
+    menu_keyboard = ReplyKeyboardMarkup(
+    [
+        [KeyboardButton(_("user_info.menu.user_profile"))],
+        [KeyboardButton(_("user_info.menu.services")), KeyboardButton(_("user_info.menu.note_management"))],
+        [KeyboardButton(_("user_info.menu.back_to_main"))]
+    ],
+    resize_keyboard=True
+)
+    
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=_("user_info.prompts.user_header", name=user_name, username=user_username, user_id=telegram_id),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=menu_keyboard
+    )
