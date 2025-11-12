@@ -29,14 +29,74 @@ run_install() {
 run_update() {
     echo -e "${YELLOW}Starting update process...${NC}"
     cd "$BOT_DIR" || { echo -e "${RED}Error: Could not enter bot directory.${NC}"; exit 1; }
+    
     echo "1. Fetching the latest version from GitHub..."
     LATEST_TAG=$(wget -qO- "https://api.github.com/repos/mersvpn/mersyar-bot/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -z "$LATEST_TAG" ]; then
+        echo -e "${RED}Error: Could not determine the latest release tag from GitHub.${NC}"; return;
+    fi
     DOWNLOAD_URL="https://github.com/mersvpn/mersyar-bot/archive/refs/tags/$LATEST_TAG.tar.gz"
     TARBALL_NAME="${LATEST_TAG}.tar.gz"
-    wget -q "$DOWNLOAD_URL" -O "/tmp/$TARBALL_NAME"; tar -xzf "/tmp/$TARBALL_NAME" --strip-components=1 -C "$BOT_DIR"; rm "/tmp/$TARBALL_NAME"
-    echo "2. Updating Python libraries..."; source venv/bin/activate; pip install -r requirements.txt; deactivate
-    echo "3. Restarting the bot service..."; systemctl restart mersyar-bot
-    echo -e "${GREEN}Bot successfully updated to version $LATEST_TAG and restarted!${NC}"
+    
+    # Download and extract to a temporary directory first to avoid breaking the running bot
+    TEMP_DIR="/tmp/mersyar-update-$$"
+    mkdir -p "$TEMP_DIR"
+    wget -q "$DOWNLOAD_URL" -O "$TEMP_DIR/$TARBALL_NAME"
+    tar -xzf "$TEMP_DIR/$TARBALL_NAME" --strip-components=1 -C "$TEMP_DIR"
+    
+    # Copy new files over the old ones
+    rsync -a --delete "$TEMP_DIR/" "$BOT_DIR/"
+    rm -rf "$TEMP_DIR"
+    
+    echo "2. Activating virtual environment and updating libraries..."
+    source "$BOT_DIR/venv/bin/activate"
+    pip install -r "$BOT_DIR/requirements.txt"
+    
+    # --- 🟢 START OF NEW INTELLIGENT MIGRATION LOGIC 🟢 ---
+    echo "3. Applying database migrations..."
+    
+    # Try to run the upgrade.
+    if alembic upgrade head; then
+        # If it succeeds, everything is fine.
+        echo -e "${GREEN}Database is up to date.${NC}"
+    else
+        # If it fails, it's likely due to an inconsistent history.
+        echo -e "${YELLOW}Initial migration failed. This can happen after a major update.${NC}"
+        echo "Attempting to automatically resolve migration history..."
+        
+        # Step A: Get the latest revision ID from the code.
+        LATEST_REVISION_ID=$(alembic heads | awk '{print $1}')
+        
+        if [ -z "$LATEST_REVISION_ID" ]; then
+            echo -e "${RED}Could not determine the latest revision ID from the code. Aborting migration.${NC}"
+        else
+            echo "Latest revision ID found in code: ${LATEST_REVISION_ID}"
+            echo "Stamping the database with this version to resolve inconsistencies..."
+            
+            # Step B: Stamp the database with the latest revision from the code.
+            if alembic stamp "$LATEST_REVISION_ID"; then
+                echo "Database stamped successfully. Re-running upgrade..."
+                
+                # Step C: Try upgrading again. This time it should work.
+                if alembic upgrade head; then
+                    echo -e "${GREEN}Database migrations applied successfully after stamping.${NC}"
+                else
+                    echo -e "${RED}FATAL: Migration failed even after stamping. Manual intervention required.${NC}"
+                fi
+            else
+                echo -e "${RED}FATAL: Failed to stamp the database. Manual intervention required.${NC}"
+            fi
+        fi
+    fi
+    # --- 🟢 END OF NEW INTELLIGENT MIGRATION LOGIC 🟢 ---
+    
+    deactivate
+    echo "4. Restarting the bot service..."
+    if systemctl restart mersyar-bot; then
+        echo -e "${GREEN}Bot successfully updated to version $LATEST_TAG and restarted!${NC}"
+    else
+        echo -e "${RED}Failed to restart the bot service. Please check 'systemctl status mersyar-bot'.${NC}"
+    fi
 }
 
 run_manual_backup() {

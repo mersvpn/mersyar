@@ -170,28 +170,67 @@ manage_bot() {
                 info "Updating bot by rebuilding the image from GitHub..."
                 warning "This may take a few minutes."
                 
-                info "Step 1: Building the new image from the latest release..."
-                if docker compose build --no-cache bot; then
-                    info "Step 2: Re-creating the container with the new image..."
-                    if docker compose up -d; then
-                        success "Container updated successfully!"
-                        
-                        # NEW STEP: Run migrations after update
-                        info "Step 3: Applying database migrations..."
-                        sleep 5 # Give the bot a moment to start
-                        if docker compose exec -T bot bash -c "pip install alembic pymysql sqlalchemy python-dotenv && alembic upgrade head"; then
-                            success "Database migrations applied."
-                            info "Bot is now fully updated."
-                        else
-                            error "Database migration failed during update. Please check logs."
-                        fi
-                        
-                    else
-                        error "Failed to re-create the container."
-                    fi
-                else
-                    error "Failed to build the new image."
+                info "Step 1: Shutting down the bot container to prevent issues..."
+                docker compose stop bot
+                
+                info "Step 2: Building the new image from the latest release..."
+                if ! docker compose build --no-cache bot; then
+                    error "Failed to build the new image. Aborting update."
+                    docker compose up -d bot # Try to bring the old bot back up
+                    show_menu; return
                 fi
+                
+                info "Step 3: Re-creating all containers with the new image..."
+                if ! docker compose up -d --force-recreate; then
+                    error "Failed to re-create containers. Aborting update."
+                    show_menu; return
+                fi
+                success "Containers updated successfully!"
+
+                info "Step 4: Applying database migrations..."
+                warning "Waiting for the bot container to be fully ready..."
+                
+                # Robust wait loop
+                for i in {1..10}; do
+                    if docker compose ps | grep 'mersyar-bot' | grep -q 'running'; then
+                        info "Bot container is running. Proceeding with migration."
+                        break
+                    fi
+                    info "Waiting... ($i/10)"; sleep 3
+                done
+                
+                if ! docker compose ps | grep 'mersyar-bot' | grep -q 'running'; then
+                    error "Bot container did not start correctly after 30 seconds."
+                    error "Migration skipped. Please check logs with option 1."
+                    show_menu; return
+                fi
+                
+                # --- START OF INTELLIGENT MIGRATION LOGIC ---
+                info "Checking database status before migration..."
+                if docker compose exec -T bot alembic upgrade head; then
+                    success "Database is up to date."
+                else
+                    warning "Initial migration failed, attempting to automatically resolve..."
+                    LATEST_REVISION_ID=$(docker compose exec -T bot alembic heads | awk '{print $1}')
+                    if [ -z "$LATEST_REVISION_ID" ]; then
+                        error "Could not determine the latest revision ID. Aborting."
+                    else
+                        info "Stamping the database with latest revision: ${LATEST_REVISION_ID}"
+                        if docker compose exec -T bot alembic stamp "$LATEST_REVISION_ID"; then
+                            info "Re-running upgrade after stamping..."
+                            if docker compose exec -T bot alembic upgrade head; then
+                                success "Database migrations applied successfully after stamping."
+                            else
+                                error "FATAL: Migration failed even after stamping. Manual intervention required."
+                            fi
+                        else
+                            error "FATAL: Failed to stamp the database. Manual intervention required."
+                        fi
+                    fi
+                fi
+                # --- END OF INTELLIGENT MIGRATION LOGIC ---
+                
+                info "Bot is now fully updated."
                 show_menu
                 ;;
            6)
@@ -372,16 +411,31 @@ EOF
     
     # --- 4. Build, Run, and Migrate ---
     info "[4/7] Building and starting Docker containers..."
-    docker compose up --build -d
+    # We add '--force-recreate' to ensure a clean start if old containers exist.
+    docker compose up --build -d --force-recreate
 
-    info "Waiting a few seconds for the container to initialize..."
-    sleep 10
+    info "Waiting for the bot container to become ready for migrations..."
+    # Robust wait loop
+    for i in {1..10}; do
+        if docker compose ps | grep 'mersyar-bot' | grep -q 'running'; then
+            info "Bot container is running. Proceeding with migration."
+            break
+        fi
+        info "Waiting... ($i/10)"; sleep 3
+    done
+
+    if ! docker compose ps | grep 'mersyar-bot' | grep -q 'running'; then
+        error "Bot container did not start correctly after 30 seconds."
+        error "Installation failed. Please check logs with 'docker compose logs bot'."
+        exit 1
+    fi
     
     info "Running database migrations inside the container..."
-    if ! docker compose exec -T bot bash -c "pip install alembic pymysql sqlalchemy python-dotenv && alembic upgrade head"; then
-        error "Database migration failed. Please check the logs."
-        error "To see logs, run: mersyar"
-        error "Then select option 1 (View Bot Logs)."
+    # This command is simpler as pip install is handled by the Dockerfile.
+    # It runs 'alembic upgrade head' which will create all tables from scratch on a new install.
+    if ! docker compose exec -T bot alembic upgrade head; then
+        error "Database migration failed during installation. This is a critical error."
+        error "To see logs, run: docker compose logs bot"
         exit 1
     fi
     success "Database migration completed successfully."

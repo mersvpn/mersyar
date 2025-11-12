@@ -149,13 +149,14 @@ async def prompt_for_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def save_financial_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    from modules.general.actions import end_conversation_and_show_menu
+    from shared.callbacks import main_menu_fallback
+    
     from shared.translator import _
     action = context.user_data.get('financial_action')
     new_value = update.message.text.strip()
     if not action:
         await update.message.reply_text(_("financials_settings.error_unknown_action"))
-        return await end_conversation_and_show_menu(update, context)
+        return await main_menu_fallback(update, context)
         
     settings_to_save = {}
     if action == 'holder':
@@ -233,14 +234,14 @@ async def prompt_for_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def save_new_plan_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    from modules.general.actions import end_conversation_and_show_menu
+    from shared.callbacks import main_menu_fallback
     from shared.translator import _
     new_name = update.message.text.strip()
     action = context.user_data.pop('plan_name_to_edit', None)
 
     if not action:
         await update.message.reply_text(_("financials_settings.error_unknown_action"))
-        return await end_conversation_and_show_menu(update, context)
+        return await main_menu_fallback(update, context)
 
     key_to_save = "volumetric_plan_button_text" if action == 'volumetric' else "unlimited_plan_button_text"
     await crud_bot_setting.save_bot_settings({key_to_save: new_name})

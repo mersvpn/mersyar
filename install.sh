@@ -182,14 +182,47 @@ fi
 # --- 9. Finalizing ---
 info "[9/9] Finalizing..."
 
-# --- START OF NEW SECTION ---
-info "-> Running initial database migration..."
+# --- START OF INTELLIGENT MIGRATION LOGIC ---
+info "-> Applying database migrations..."
 cd "$PROJECT_DIR"
 source venv/bin/activate
-alembic upgrade head
+
+# Try to run the upgrade.
+if alembic upgrade head; then
+    # If it succeeds, everything is fine (new install or normal update).
+    success "-> Database migrated to the latest version."
+else
+    # If it fails, it's likely due to an inconsistent history during an update.
+    warning "-> Initial migration failed. This can happen after a major update."
+    info "-> Attempting to automatically resolve migration history..."
+    
+    # Step A: Get the latest revision ID from the code.
+    LATEST_REVISION_ID=$(alembic heads | awk '{print $1}')
+    
+    if [ -z "$LATEST_REVISION_ID" ]; then
+        error "-> Could not determine the latest revision ID from the code. Aborting."
+    else
+        info "-> Latest revision ID found in code: ${LATEST_REVISION_ID}"
+        info "-> Stamping the database with this version to resolve inconsistencies..."
+        
+        # Step B: Stamp the database with the latest revision from the code.
+        if alembic stamp "$LATEST_REVISION_ID"; then
+            info "-> Database stamped successfully. Re-running upgrade..."
+            
+            # Step C: Try upgrading again. This time it should work.
+            if alembic upgrade head; then
+                success "-> Database migrations applied successfully after stamping."
+            else
+                error "-> FATAL: Migration failed even after stamping. Manual intervention required."
+            fi
+        else
+            error "-> FATAL: Failed to stamp the database. Manual intervention required."
+        fi
+    fi
+fi
+
 deactivate
-success "-> Database migrated to the latest version."
-# --- END OF NEW SECTION ---
+# --- END OF INTELLIGENT MIGRATION LOGIC ---
 
 systemctl daemon-reload
 systemctl enable $SERVICE_NAME
