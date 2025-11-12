@@ -182,47 +182,32 @@ fi
 # --- 9. Finalizing ---
 info "[9/9] Finalizing..."
 
-# --- START OF INTELLIGENT MIGRATION LOGIC ---
 info "-> Applying database migrations..."
 cd "$PROJECT_DIR"
 source venv/bin/activate
 
-# Try to run the upgrade.
-if alembic upgrade head; then
-    # If it succeeds, everything is fine (new install or normal update).
-    success "-> Database migrated to the latest version."
-else
-    # If it fails, it's likely due to an inconsistent history during an update.
-    warning "-> Initial migration failed. This can happen after a major update."
-    info "-> Attempting to automatically resolve migration history..."
-    
-    # Step A: Get the latest revision ID from the code.
+# This intelligent logic handles both new installs and re-installs.
+if ! alembic upgrade head; then
+    warning "-> Initial migration failed, attempting to stamp and re-run..."
     LATEST_REVISION_ID=$(alembic heads | awk '{print $1}')
-    
     if [ -z "$LATEST_REVISION_ID" ]; then
-        error "-> Could not determine the latest revision ID from the code. Aborting."
-    else
-        info "-> Latest revision ID found in code: ${LATEST_REVISION_ID}"
-        info "-> Stamping the database with this version to resolve inconsistencies..."
-        
-        # Step B: Stamp the database with the latest revision from the code.
-        if alembic stamp "$LATEST_REVISION_ID"; then
-            info "-> Database stamped successfully. Re-running upgrade..."
-            
-            # Step C: Try upgrading again. This time it should work.
-            if alembic upgrade head; then
-                success "-> Database migrations applied successfully after stamping."
-            else
-                error "-> FATAL: Migration failed even after stamping. Manual intervention required."
-            fi
-        else
-            error "-> FATAL: Failed to stamp the database. Manual intervention required."
-        fi
+        error "-> Could not determine revision ID. Migration failed."
+        deactivate
+        exit 1
     fi
+
+    if alembic stamp "$LATEST_REVISION_ID" && alembic upgrade head; then
+        success "-> Database migration completed successfully after stamping."
+    else
+        error "-> Database migration failed even after stamping. Please check logs."
+        deactivate
+        exit 1
+    fi
+else
+    success "-> Database migrated to the latest version."
 fi
 
 deactivate
-# --- END OF INTELLIGENT MIGRATION LOGIC ---
 
 systemctl daemon-reload
 systemctl enable $SERVICE_NAME

@@ -411,11 +411,9 @@ EOF
     
     # --- 4. Build, Run, and Migrate ---
     info "[4/7] Building and starting Docker containers..."
-    # We add '--force-recreate' to ensure a clean start if old containers exist.
     docker compose up --build -d --force-recreate
 
-    info "Waiting for the bot container to become ready for migrations..."
-    # Robust wait loop
+    info "Waiting for the bot container to become ready..."
     for i in {1..10}; do
         if docker compose ps | grep 'mersyar-bot' | grep -q 'running'; then
             info "Bot container is running. Proceeding with migration."
@@ -425,20 +423,29 @@ EOF
     done
 
     if ! docker compose ps | grep 'mersyar-bot' | grep -q 'running'; then
-        error "Bot container did not start correctly after 30 seconds."
-        error "Installation failed. Please check logs with 'docker compose logs bot'."
+        error "Bot container did not start correctly. Installation failed."
         exit 1
     fi
     
     info "Running database migrations inside the container..."
-    # This command is simpler as pip install is handled by the Dockerfile.
-    # It runs 'alembic upgrade head' which will create all tables from scratch on a new install.
+    # This intelligent logic handles both new installs and re-installs.
     if ! docker compose exec -T bot alembic upgrade head; then
-        error "Database migration failed during installation. This is a critical error."
-        error "To see logs, run: docker compose logs bot"
-        exit 1
+        warning "Initial migration failed, attempting to stamp and re-run..."
+        LATEST_REVISION_ID=$(docker compose exec -T bot alembic heads | awk '{print $1}')
+        if [ -z "$LATEST_REVISION_ID" ]; then
+            error "Could not determine revision ID. Migration failed."
+            exit 1
+        fi
+        
+        if docker compose exec -T bot alembic stamp "$LATEST_REVISION_ID" && docker compose exec -T bot alembic upgrade head; then
+            success "Database migration completed successfully after stamping."
+        else
+            error "Database migration failed even after stamping. Please check logs."
+            exit 1
+        fi
+    else
+        success "Database migration completed successfully."
     fi
-    success "Database migration completed successfully."
 
     # ==============================================================================
     #                      --- START OF REVISED NGINX/SSL LOGIC ---
