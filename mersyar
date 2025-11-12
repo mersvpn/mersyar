@@ -77,6 +77,16 @@ run_update() {
     
     deactivate
     echo "4. Restarting the bot service..."
+    # --- 🟢 FINAL FIX - ADD THIS BLOCK TO UPDATE THE CLI ITSELF 🟢 ---
+    echo "5. Updating the 'mersyar' CLI tool..."
+    if [ -f "$BOT_DIR/mersyar" ]; then
+        if cp "$BOT_DIR/mersyar" "/usr/local/bin/mersyar"; then
+            echo -e "${GREEN}CLI tool 'mersyar' updated successfully.${NC}"
+        else
+            echo -e "${RED}Warning: Could not update the 'mersyar' CLI tool.${NC}"
+        fi
+    fi
+    # --- 🟢 END OF FINAL FIX 🟢 ---
     if systemctl restart mersyar-bot; then
         echo -e "${GREEN}Bot successfully updated to version $LATEST_TAG and restarted!${NC}"
     else
