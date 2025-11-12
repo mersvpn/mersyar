@@ -10,10 +10,10 @@ from logging.config import fileConfig
 sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..')))
 
 # 2. Import and call load_dotenv with an explicit path
-#from dotenv import load_dotenv
-#project_root = os.path.realpath(os.path.join(os.path.dirname(__file__), '..'))
-#dotenv_path = os.path.join(project_root, '.env')
-#load_dotenv(dotenv_path=dotenv_path)
+from dotenv import load_dotenv
+project_root = os.path.realpath(os.path.join(os.path.dirname(__file__), '..'))
+dotenv_path = os.path.join(project_root, '.env')
+load_dotenv(dotenv_path=dotenv_path)
 
 # 3. Now we can safely import our project modules
 from database.models import Base
