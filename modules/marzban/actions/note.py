@@ -58,6 +58,8 @@ async def get_duration_and_ask_for_data_limit(update: Update, context: ContextTy
     except (ValueError, TypeError):
         await update.message.reply_text(_("marzban.marzban_note.invalid_number_input")); return GET_DURATION
         
+    if 'note_details' not in context.user_data:
+        context.user_data['note_details'] = {}
     context.user_data['note_details']['duration'] = duration
     message = _("marzban.marzban_note.duration_saved", duration=duration) + _("marzban.marzban_note.step2_ask_datalimit")
     await update.message.reply_text(message, parse_mode=ParseMode.HTML)
@@ -72,6 +74,8 @@ async def get_data_limit_and_ask_for_price(update: Update, context: ContextTypes
     except (ValueError, TypeError):
         await update.message.reply_text(_("marzban.marzban_note.invalid_number_input")); return GET_DATA_LIMIT
         
+    if 'note_details' not in context.user_data:
+        context.user_data['note_details'] = {}
     context.user_data['note_details']['data_limit_gb'] = data_limit
     message = _("marzban.marzban_note.datalimit_saved", datalimit=data_limit) + _("marzban.marzban_note.step3_ask_price")
     await update.message.reply_text(message, parse_mode=ParseMode.HTML)

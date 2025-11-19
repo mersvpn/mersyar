@@ -1,14 +1,19 @@
 # --- START OF FILE modules/general/actions.py ---
 import logging
+import html
+from typing import Optional, List, Dict, Any
+from decimal import Decimal
+
 from telegram import Update, User
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes, ConversationHandler, ApplicationHandlerStop
 from telegram.constants import ParseMode
+
 from database.crud import user as crud_user
 from database.crud import bot_setting as crud_bot_setting
+from database.crud import marzban_link as crud_marzban_link
+from database.crud import panel_credential as crud_panel
 from config import config
 from shared.auth import is_admin, admin_only, ensure_channel_membership
-import html
-from telegram.ext import ConversationHandler
 from modules.bot_settings.data_manager import is_bot_active
 from shared.log_channel import log_new_user_joined
 from shared.translator import _
@@ -17,32 +22,36 @@ from shared.keyboards import (
     get_admin_main_menu_keyboard,
     get_customer_view_for_admin_keyboard
 )
-from telegram.ext import ContextTypes, ConversationHandler, ApplicationHandlerStop
 from modules.marzban.actions.data_manager import normalize_username
-from database.crud import marzban_link as crud_marzban_link
-# ✨ NEW IMPORTS FOR MULTI-PANEL ARCHITECTURE (TEMPORARY FIX)
-from typing import Optional, List, Dict, Any
 from core.panel_api.marzban import MarzbanPanel
-from database.crud import panel_credential as crud_panel
-import logging
 
+LOGGER = logging.getLogger(__name__)
+
+# --- TEMPORARY FIX FOR MULTI-PANEL ARCHITECTURE ---
 async def get_user_data(username: str):
     """Temporary stand-in function to get user data from the first available panel."""
     all_panels = await crud_panel.get_all_panels()
     if not all_panels:
-        logging.getLogger(__name__).warning("ACTION FAILED: No panels are configured in the database.")
+        LOGGER.warning("ACTION FAILED: No panels are configured in the database.")
         return None
     
-    first_panel = all_panels[0]
-    credentials = {'api_url': first_panel.api_url, 'username': first_panel.username, 'password': first_panel.password}
-    api = MarzbanPanel(credentials)
-    return await api.get_user_data(username)
+    # Try to find user in all panels
+    for panel in all_panels:
+        try:
+            credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
+            api = MarzbanPanel(credentials)
+            user_data = await api.get_user_data(username)
+            if user_data:
+                # Attach panel_id to result for linking logic
+                user_data['panel_id'] = panel.id
+                return user_data
+        except Exception as e:
+            LOGGER.warning(f"Failed to check panel {panel.name} for user {username}: {e}")
+            continue
+            
+    return None
 # --- END OF TEMPORARY FIX ---
 
-LOGGER = logging.getLogger(__name__)
-
-
-# --- REPLACE THIS ENTIRE FUNCTION in modules/general/actions.py ---
 
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
@@ -56,18 +65,17 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         message_text = _("general.welcome", first_name=html.escape(user.first_name))
 
-
     # Determine the correct keyboard and append the dashboard message
     if user.id in config.AUTHORIZED_USER_IDS and not context.user_data.get('is_admin_in_customer_view'):
         reply_markup = get_admin_main_menu_keyboard()
-        if not context.user_data.get('is_rerouted_from_conv'): # Check flag again
+        if not context.user_data.get('is_rerouted_from_conv'): 
             message_text += "\n" + _("general.admin_dashboard_active")
     else:
         if context.user_data.get('is_admin_in_customer_view'):
             reply_markup = await get_customer_view_for_admin_keyboard()
         else:
             reply_markup = await get_customer_main_menu_keyboard(update.effective_user.id)
-        if not context.user_data.get('is_rerouted_from_conv'): # Check flag again
+        if not context.user_data.get('is_rerouted_from_conv'): 
             message_text += "\n" + _("general.customer_dashboard_prompt")
 
     target_message = update.effective_message
@@ -95,6 +103,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_return_from_conv:
         LOGGER.critical(f"!!!!!! [CRITICAL LOG] Fresh 'start' CALLED for user {user.id}. !!!!!!")
         if not await is_bot_active() and not await is_admin(user.id):
+            # Maintenance Mode Message
             await update.message.reply_markdown(
                 "**🛠 ربات در حال تعمیر و به‌روزرسانی است**\n\n"
                 "در حال حاضر امکان پاسخگویی وجود ندارد. لطفاً کمی بعد دوباره تلاش کنید.\n\n"
@@ -109,12 +118,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 bot_settings = await crud_bot_setting.load_bot_settings()
                 welcome_gift = bot_settings.get('welcome_gift_amount', 0)
                 if welcome_gift > 0:
-                    await crud_user.increase_wallet_balance(user.id, welcome_gift)
+                    await crud_user.increase_wallet_balance(user.id, Decimal(welcome_gift))
                     gift_message = _("general.welcome_gift_received", amount=f"{welcome_gift:,}")
                     await context.bot.send_message(chat_id=user.id, text=gift_message)
         except Exception as e:
             LOGGER.error(_("errors.db_user_save_failed", user_id=user.id, error=e))
 
+    # Reuse send_main_menu logic manually here to avoid recursion issues or complex logic duplication
     if is_return_from_conv:
         message_text = _("general.returned_to_main_menu")
     else:
@@ -193,7 +203,6 @@ async def notify_admins_on_link(context: ContextTypes.DEFAULT_TYPE, customer: Us
         except Exception as e:
             LOGGER.error(f"Failed to send linking notification to admin {admin_id}: {e}")
 
-# --- START: Replace the entire handle_deep_link function ---
 
 async def handle_deep_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -204,20 +213,14 @@ async def handle_deep_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         telegram_user_id = user.id
         LOGGER.info(f"User {telegram_user_id} started bot with deep link for Marzban user '{marzban_username_raw}'.")
         
-        # In a multi-panel setup, a deep link doesn't know which panel the user is on.
-        # We must search all panels.
-        user_panel_data = await get_user_data(marzban_username_normalized) # Uses our temporary function
+        user_panel_data = await get_user_data(marzban_username_normalized)
         
         if not user_panel_data:
             await update.message.reply_text(_("marzban.linking.user_not_found"))
         else:
-            # ✨ NEW LOGIC: We found the user, now we need to know which panel it was on.
-            # The panel_id should be in the user_panel_data from our temporary function,
-            # but for a robust solution, we find the panel again.
             panel_id_to_link = user_panel_data.get('panel_id')
 
             if not panel_id_to_link:
-                # Fallback: if the temporary get_user_data doesn't return panel_id, we just use the first panel.
                 all_panels = await crud_panel.get_all_panels()
                 if all_panels:
                     panel_id_to_link = all_panels[0].id
@@ -227,7 +230,6 @@ async def handle_deep_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     await start(update, context)
                     return
             
-            # ✨ MODIFIED: Use the new CRUD function with panel_id
             success = await crud_marzban_link.create_or_update_link(marzban_username_normalized, telegram_user_id, panel_id_to_link)
             
             if success:
@@ -239,45 +241,41 @@ async def handle_deep_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     await start(update, context)
 
-# FILE: modules/general/actions.py
-# REPLACE THIS FUNCTION
+
+# --- COMPATIBILITY FIX: BOTH FUNCTIONS EXIST ---
+
+async def end_conversation_and_show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    New function name as required by panel_manager.
+    """
+    context.user_data['is_rerouted_from_conv'] = True
+    await send_main_menu(update, context)
+    return ConversationHandler.END
 
 async def end_conversation_and_show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    A wrapper for send_main_menu, designed to be used as a fallback in ConversationHandlers.
-    It sets a flag, shows the main menu, and explicitly ends the conversation.
+    Old function name kept for backward compatibility with other modules.
+    Redirects to the new function logic.
     """
-    # ✨ FIX: Set the flag BEFORE calling send_main_menu
-    context.user_data['is_rerouted_from_conv'] = True
-    
-    # Now, call send_main_menu which will read the flag and show the correct message.
-    await send_main_menu(update, context)
-    
-    async def end_conversation_and_show_main_menu(update, context):
-        context.user_data['is_rerouted_from_conv'] = True
-        await send_main_menu(update, context)
-        return ConversationHandler.END
+    return await end_conversation_and_show_menu(update, context)
 
 
 async def close_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Deletes the message containing the callback query button."""
     query = update.callback_query
-    await query.answer()  # Answer the callback to remove the "loading" icon
+    await query.answer()
     try:
         await query.message.delete()
     except Exception as e:
-        # Log if the message couldn't be deleted (e.g., too old, no rights)
         LOGGER.warning(f"Could not delete message {query.message.message_id} for user {query.from_user.id}: {e}")
 
-# --- ADD THIS FUNCTION to the end of modules/general/actions.py ---
+
 async def back_to_main_menu_simple(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logging.critical("!!!!!! [TRACE] Function 'back_to_main_menu_simple' in general/actions.py CALLED. !!!!!!")
     """
     A simple action that only shows the "Returned to main menu" message.
     It's meant to be used by a global MessageHandler.
     """
-    from shared.keyboards import get_admin_main_menu_keyboard
-    from shared.translator import _
+    logging.critical("!!!!!! [TRACE] Function 'back_to_main_menu_simple' in general/actions.py CALLED. !!!!!!")
     
     await update.message.reply_text(
         _("general.returned_to_main_menu"),

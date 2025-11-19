@@ -10,6 +10,7 @@ from telegram.constants import ParseMode
 from config import config
 from shared.translator import _
 from shared.keyboards import get_customer_main_menu_keyboard, get_admin_main_menu_keyboard, get_back_to_main_menu_keyboard
+from database.models.panel_credential import PanelType
 # ✨ NEW IMPORTS FOR MULTI-PANEL ARCHITECTURE
 from typing import Optional, List, Dict, Any
 from core.panel_api.base import PanelAPI
@@ -34,7 +35,7 @@ ITEMS_PER_PAGE = 8
 
 async def _get_api_for_panel(panel) -> Optional[PanelAPI]:
     """Factory to create an API object from a panel DB object."""
-    if panel.panel_type.value == "marzban":
+    if panel.panel_type == PanelType.MARZBAN:
         credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
         return MarzbanPanel(credentials)
     return None
@@ -46,7 +47,7 @@ async def _get_api_for_user(marzban_username: str) -> Optional[PanelAPI]:
         return None
     
     panel = link.panel
-    if panel.panel_type.value == "marzban":
+    if panel.panel_type == PanelType.MARZBAN:
         credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
         return MarzbanPanel(credentials)
     return None
@@ -100,68 +101,77 @@ async def handle_my_service(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         loading_message = await update.message.reply_text(_("customer.customer_service.loading"))
 
     try:
+        # 1. Get all links for this Telegram user
         links = await crud_marzban_link.get_links_by_telegram_id_with_panel(user_id)
         if not links:
             await loading_message.edit_text(_("customer.customer_service.no_service_linked"))
             return ConversationHandler.END
 
-        # Group user links by panel to minimize API calls
-        links_by_panel = defaultdict(list)
-        for link in links:
-            if link.panel:
-                links_by_panel[link.panel].append(link.marzban_username)
+        # 2. Define a fast helper to fetch ONLY specific user data
+        async def fetch_single_service(link):
+            if not link.panel: return None
+            try:
+                api = await _get_api_for_panel(link.panel)
+                if not api: return None
+                
+                # ✨ OPTIMIZATION: Get ONLY this user's data, not the whole list
+                user_data = await api.get_user_data(link.marzban_username)
+                
+                if user_data:
+                    user_data['panel_name'] = link.panel.name
+                    user_data['panel_id'] = link.panel.id
+                    # Ensure we have the correct username case from the link
+                    user_data['username'] = link.marzban_username 
+                    return user_data
+                else:
+                    # User returned None/Empty -> Likely deleted on panel
+                    return {'dead_link': link.marzban_username}
+            except Exception as e:
+                LOGGER.warning(f"Failed to fetch service {link.marzban_username} from panel {link.panel.name}: {e}")
+                return None
 
-        valid_accounts = []
-        all_user_links = {link.marzban_username for link in links}
-
-        async def fetch_panel_data(panel, usernames):
-            api = await _get_api_for_panel(panel)
-            if not api: return []
-            
-            # Fetch all users from the panel once
-            all_panel_users_data = await api.get_all_users()
-            if not all_panel_users_data: return []
-
-            # Create a dictionary for quick lookups
-            users_dict = {user['username']: user for user in all_panel_users_data}
-
-            # Filter out the data for the specific user's services
-            found_users = []
-            for username in usernames:
-                if username in users_dict:
-                    user_data = users_dict[username]
-                    user_data['panel_name'] = panel.name
-                    user_data['panel_id'] = panel.id
-                    found_users.append(user_data)
-            return found_users
-
-        tasks = [fetch_panel_data(panel, usernames) for panel, usernames in links_by_panel.items()]
+        # 3. Execute all requests in parallel
+        tasks = [fetch_single_service(link) for link in links]
         results = await asyncio.gather(*tasks)
         
-        for user_list in results:
-            valid_accounts.extend(user_list)
-        
-        found_usernames = {acc['username'] for acc in valid_accounts}
-        dead_links_usernames = all_user_links - found_usernames
+        valid_accounts = []
+        dead_links = []
 
-        if dead_links_usernames:
-            LOGGER.info(f"Cleaning up {len(dead_links_usernames)} dead links for user {user_id}: {dead_links_usernames}")
-            for username in dead_links_usernames:
+        # 4. Process results
+        for res in results:
+            if not res: continue
+            if 'dead_link' in res:
+                dead_links.append(res['dead_link'])
+            else:
+                valid_accounts.append(res)
+
+        # 5. Clean up dead links (users deleted from panel but still in bot DB)
+        if dead_links:
+            LOGGER.info(f"Cleaning up {len(dead_links)} dead links for user {user_id}: {dead_links}")
+            for username in dead_links:
                 await crud_marzban_link.delete_marzban_link(username)
         
         if not valid_accounts:
             await loading_message.edit_text(_("customer.customer_service.no_valid_service_found"))
             return ConversationHandler.END
 
-        # Filter out test accounts
+        # 6. Filter out test accounts (Parallel check for notes)
         note_tasks = [crud_user_note.get_user_note(acc['username']) for acc in valid_accounts]
         notes = await asyncio.gather(*note_tasks)
-        final_accounts = [acc for i, acc in enumerate(valid_accounts) if not (notes[i] and notes[i].is_test_account)]
+        
+        final_accounts = []
+        for i, acc in enumerate(valid_accounts):
+            note = notes[i]
+            # If it's a test account, skip it (or handle accordingly)
+            if note and note.is_test_account:
+                continue
+            final_accounts.append(acc)
         
         if not final_accounts:
             await loading_message.edit_text(_("customer.customer_service.no_valid_service_found"))
             return ConversationHandler.END
         
+        # 7. Display Logic
         if len(final_accounts) == 1:
             return await display_service_details(user_id, loading_message, context, final_accounts[0]['username'])
         else:

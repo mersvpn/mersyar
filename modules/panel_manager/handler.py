@@ -1,10 +1,11 @@
-# FILE: modules/panel_manager/handler.py (FINAL VERSION WITH CORRECT TRANSLATION HANDLING)
+# FILE: modules/panel_manager/handler.py (FINAL FIXED VERSION)
 
+from telegram import Update # اضافه شد
 from telegram.ext import (
     Application, ConversationHandler, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters
+    MessageHandler, filters, ContextTypes # اضافه شد
 )
-# ✨ FIX: Import the translator object directly
+from modules.general.actions import end_conversation_and_show_menu
 from shared.translator import translator
 from shared.auth import admin_only_conv, admin_only
 from modules.bot_settings.actions import show_settings_and_tools_menu
@@ -12,18 +13,29 @@ from shared.callbacks import cancel_and_remove_message
 
 from . import actions as panel_actions
 from modules.marzban.actions import template
-from shared.callbacks import cancel_to_panel_management # We will create this callback soon
+from shared.callbacks import cancel_to_panel_management 
+
 # Define states for the main conversation
 MANAGE_PANEL_MENU = 100
+
+# --- NEW SILENT END FUNCTION ---
+async def silent_end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Ends the conversation silently. 
+    It lets the global handler in 'general' send the 'Returned to main menu' message.
+    This prevents double messages.
+    """
+    return ConversationHandler.END
+# -------------------------------
 
 def register(application: Application) -> None:
     """Registers all handlers for the Panel Manager module."""
 
-    # ✨ FIX: Get translated strings directly using the translator object
-    # This ensures we have a standard string when building the Regex filter.
     PANEL_MANAGEMENT_TEXT = translator.get("keyboards.settings_and_tools.panel_management")
     ADD_PANEL_TEXT = translator.get("keyboards.panel_management.add_panel")
+    
     BACK_TO_SETTINGS_TEXT = translator.get("keyboards.panel_management.back_to_settings")
+    BACK_TO_MAIN_TEXT = translator.get("keyboards.general.back_to_main_menu") 
 
 
     add_panel_conv = ConversationHandler(
@@ -52,34 +64,38 @@ def register(application: Application) -> None:
     )
 
     manage_panel_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f'^{PANEL_MANAGEMENT_TEXT}$'), admin_only_conv(panel_actions.show_panel_management_menu))],
-        states={
-            MANAGE_PANEL_MENU: [
-                template_conv,
-                add_panel_conv,
+            entry_points=[MessageHandler(filters.Regex(f'^{PANEL_MANAGEMENT_TEXT}$'), admin_only_conv(panel_actions.show_panel_management_menu))],
+            states={
+                MANAGE_PANEL_MENU: [
+                    template_conv,
+                    add_panel_conv,
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND &
+                        ~filters.Regex(f'^{ADD_PANEL_TEXT}$') &
+                        ~filters.Regex(f'^{BACK_TO_SETTINGS_TEXT}$') &
+                        ~filters.Regex(f'^{BACK_TO_MAIN_TEXT}$'), 
+                        panel_actions.select_panel_from_reply
+                    ),
+                    
+                    CallbackQueryHandler(admin_only(panel_actions.check_panel_connection), pattern=r'^panel_status_'),
+                    CallbackQueryHandler(admin_only(panel_actions.confirm_delete_panel), pattern=r'^confirm_delete_panel_'),
+                    CallbackQueryHandler(admin_only(panel_actions.do_delete_panel), pattern=r'^do_delete_panel_'),
+                    CallbackQueryHandler(admin_only(panel_actions.migrate_and_delete_panel), pattern=r'^migrate_del_'),
+                    CallbackQueryHandler(cancel_and_remove_message, pattern=r'^cancel_generic$'),
+                    CallbackQueryHandler(admin_only(panel_actions.toggle_test_panel_status), pattern=r'^toggle_test_panel_'),
+                ],
+            },
+            fallbacks=[
                 MessageHandler(
-                    filters.TEXT & ~filters.COMMAND &
-                    ~filters.Regex(f'^{ADD_PANEL_TEXT}$') &
-                    ~filters.Regex(f'^{BACK_TO_SETTINGS_TEXT}'),
-                    panel_actions.select_panel_from_reply
+                    filters.Regex(f'^{translator.get("keyboards.panel_management.back_to_settings")}$'), 
+                    show_settings_and_tools_menu
                 ),
+                # ✨ FIX: Use silent_end_conversation instead of end_conversation_and_show_menu
+                MessageHandler(filters.Regex(f'^{BACK_TO_MAIN_TEXT}$'), silent_end_conversation),
                 
-                CallbackQueryHandler(admin_only(panel_actions.check_panel_connection), pattern=r'^panel_status_'),
-                CallbackQueryHandler(admin_only(panel_actions.confirm_delete_panel), pattern=r'^confirm_delete_panel_'),
-                CallbackQueryHandler(admin_only(panel_actions.do_delete_panel), pattern=r'^do_delete_panel_'),
-                CallbackQueryHandler(admin_only(panel_actions.migrate_and_delete_panel), pattern=r'^migrate_del_'),
-                CallbackQueryHandler(cancel_and_remove_message, pattern=r'^cancel_generic$'),
-                CallbackQueryHandler(admin_only(panel_actions.toggle_test_panel_status), pattern=r'^toggle_test_panel_'),
+                CommandHandler('cancel', show_settings_and_tools_menu)
             ],
-        },
-        fallbacks=[
-            MessageHandler(
-                filters.Regex(f'^{translator.get("keyboards.panel_management.back_to_settings")}$'), 
-                show_settings_and_tools_menu # این تابع باید مکالمه را پایان دهد
-            ),
-            CommandHandler('cancel', show_settings_and_tools_menu)
-        ],
-        allow_reentry=True
-    )
+            allow_reentry=True
+        )
 
     application.add_handler(manage_panel_conv)

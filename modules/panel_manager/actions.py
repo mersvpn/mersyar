@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
 import html
-
+from database.models.panel_credential import PanelType
 # ✨ FIX: Import the translator object itself
 from shared.translator import translator
 from database.crud import panel_credential as crud_panel
@@ -42,8 +42,11 @@ async def start_add_panel_conv(update: Update, context: ContextTypes.DEFAULT_TYP
 async def select_panel_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    panel_type = query.data.replace("add_panel_type_", "")
-    context.user_data['new_panel']['panel_type'] = panel_type
+    panel_type_str = query.data.replace("add_panel_type_", "")
+    if panel_type_str == "marzban":
+        context.user_data['new_panel']['panel_type'] = PanelType.MARZBAN
+    elif panel_type_str == "x-ui":
+        context.user_data['new_panel']['panel_type'] = PanelType.XUI
     await query.edit_message_text(translator.get("panel_manager.add.prompt_name"))
     return GET_PANEL_NAME
 
@@ -133,11 +136,11 @@ async def check_panel_connection(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     api = None
-    if panel.panel_type.value == "marzban":
+    if panel.panel_type == PanelType.MARZBAN:
         from core.panel_api.marzban import MarzbanPanel
         credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
         api = MarzbanPanel(credentials)
-    elif panel.panel_type.value == "x-ui": # ✨ ADD THIS PART
+    elif panel.panel_type == PanelType.XUI:
         from core.panel_api.xui import XUIPanel
         credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
         api = XUIPanel(credentials)

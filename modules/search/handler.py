@@ -1,7 +1,9 @@
 # --- START: Replace the ENTIRE content of modules/search/handler.py ---
+from telegram import Update
 from telegram.ext import (
     Application, ConversationHandler,
-    MessageHandler, filters, CallbackQueryHandler,CommandHandler
+    MessageHandler, filters, CallbackQueryHandler,
+    CommandHandler,ContextTypes
 )
 from shared.callbacks import search_back_to_main
 from shared.translator import _
@@ -22,6 +24,10 @@ from .display import (
     prompt_for_note, save_note, refresh_data, close_menu
 )
 
+async def silent_end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ends the conversation without sending any message."""
+    return ConversationHandler.END
+
 def register(application: Application) -> None:
     """Registers the new, unified search and user management conversation handler."""
     
@@ -35,7 +41,7 @@ def register(application: Application) -> None:
         states={
             # --- State 1: Getting the search query ---
             SEARCH_PROMPT: [
-                MessageHandler(filters.Regex(f"^{_('keyboards.general.back_to_main_menu')}$"), main_menu_fallback),
+                MessageHandler(filters.Regex(f"^{_('keyboards.general.back_to_main_menu')}$"), silent_end_conversation),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only_conv(process_search_query))
             ],
             

@@ -93,29 +93,22 @@ def get_helper_tools_keyboard() -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# FILE: shared/keyboards.py
+
 async def get_customer_main_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
-    bot_settings = await crud_bot_setting.load_bot_settings()
-    is_wallet_enabled = bot_settings.get('is_wallet_enabled', False)
-    
+
     keyboard_layout = [
         [KeyboardButton(_("keyboards.customer_main_menu.shop"))],
         [
             KeyboardButton(_("keyboards.customer_main_menu.my_services")),
             KeyboardButton(_("keyboards.customer_main_menu.test_account"))
+        ],
+        [
+            KeyboardButton(_("keyboards.customer_main_menu.wallet_charge")),
+            KeyboardButton(_("keyboards.customer_main_menu.connection_guide"))
         ]
     ]
-    
-    # Third row: Wallet and Connection Guide
-    third_row = []
-    if is_wallet_enabled:
-        third_row.append(KeyboardButton(_("keyboards.customer_main_menu.wallet_charge")))
-    
-    third_row.append(KeyboardButton(_("keyboards.customer_main_menu.connection_guide")))
-    
-    if third_row:
-        keyboard_layout.append(third_row)
 
-    # Last row for Support, if enabled
     if config.SUPPORT_USERNAME:
         keyboard_layout.append([KeyboardButton(_("keyboards.customer_main_menu.support"))])
     
@@ -433,7 +426,7 @@ def build_paginated_keyboard(
             
     return InlineKeyboardMarkup(keyboard)
 
-# --- START: Replace `get_panel_management_keyboard` in keyboards.py ---
+# --- START: Replace get_panel_management_keyboard in shared/keyboards.py ---
 async def get_panel_management_keyboard() -> ReplyKeyboardMarkup:
     """Dynamically builds a ReplyKeyboard with all panel names and control buttons."""
     # Local import to prevent circular dependency issues at startup
@@ -455,7 +448,13 @@ async def get_panel_management_keyboard() -> ReplyKeyboardMarkup:
         
     # Add the static control buttons at the end
     keyboard.append([KeyboardButton(_("keyboards.panel_management.add_panel"))])
-    keyboard.append([KeyboardButton(_("keyboards.panel_management.back_to_settings"))])
+    
+    # ✨ FIX: Added 'Back to Main Menu' alongside 'Back to Settings'
+    # This ensures the user has a valid exit button that matches the handler logic
+    keyboard.append([
+        KeyboardButton(_("keyboards.panel_management.back_to_settings")),
+        KeyboardButton(_("keyboards.general.back_to_main_menu"))
+    ])
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 # --- END: Replacement ---

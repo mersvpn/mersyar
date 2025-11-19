@@ -1,5 +1,4 @@
 # FILE: modules/general/handler.py (FINAL CORRECTED VERSION)
-# --- START OF NEW FILE CONTENT ---
 
 from telegram import Update
 from telegram.ext import (
@@ -51,23 +50,27 @@ async def maintenance_gatekeeper(update: Update, context: ContextTypes.DEFAULT_T
 
 def register_gatekeeper(application: Application):
     """Registers only the maintenance gatekeeper which must run before everything."""
-    # This handler runs before all others (group -1) to check for maintenance mode.
     application.add_handler(TypeHandler(Update, maintenance_gatekeeper), group=-1)
 
 def register_commands(application: Application):
     """Registers general commands and message handlers that should have lower priority."""
 
-    # This handler specifically catches the back button from the settings menu and others.
-    # It's restricted to admins to avoid conflicts with customer buttons.
-    # ✨ FIX: Explicitly assigned to group=1 to run AFTER conversations.
-    back_button_text = translator.get("keyboards.settings_and_tools.back_to_main_menu")
-    if back_button_text:
+    # --- FIX: Catch BOTH 'Back to Main Menu' (General) AND 'Back to Settings' (Settings) ---
+    # This ensures that wherever the user clicks "Back to Main Menu", it's handled consistently here.
+    back_settings_text = translator.get("keyboards.settings_and_tools.back_to_main_menu")
+    back_general_text = translator.get("keyboards.general.back_to_main_menu")
+    
+    back_buttons = []
+    if back_settings_text: back_buttons.append(back_settings_text)
+    if back_general_text: back_buttons.append(back_general_text)
+
+    if back_buttons:
         application.add_handler(
             MessageHandler(
-                filters.Text([back_button_text]) & filters.User(user_id=config.AUTHORIZED_USER_IDS),
+                filters.Text(back_buttons) & filters.User(user_id=config.AUTHORIZED_USER_IDS),
                 back_to_main_menu_simple
             ),
-            group=1 # This is the crucial fix
+            group=1 
         )
 
     # --- CORE COMMANDS ---
@@ -85,5 +88,3 @@ def register_commands(application: Application):
             filters.Text([back_to_admin_text]) & filters.User(user_id=config.AUTHORIZED_USER_IDS),
             switch_to_admin_view
         ), group=1)
-
-# --- END OF NEW FILE CONTENT ---

@@ -24,7 +24,7 @@
     "generic_error": "خطایی رخ داد. لطفاً با پشتیبانی تماس بگیرید.",
     "db_user_save_failed": "Failed to save user {user_id} to the database: {error}",
     "username_not_found": "خطا: نام کاربری یافت نشد.",
-    "plan_info_not_found": "❌ خطایی رخ داد. اطلاعات پلن یافت نشد.",
+    "generic_error_try_again": "⚠️ خطایی رخ داد. لطفاً لحظاتی دیگر دوباره تلاش کنید.",
     "internal_error": "خطای داخلی رخ داد."
   },
   "log_channel": {

@@ -21,7 +21,7 @@ from core.panel_api.marzban import MarzbanPanel
 from database.crud import panel_credential as crud_panel
 from modules.marzban.actions import helpers as marzban_helpers
 # ---
-
+from database.models.panel_credential import PanelType
 from shared.log_channel import send_log
 from shared.callback_types import StartManualInvoice
 from .constants import GB_IN_BYTES
@@ -48,12 +48,24 @@ def generate_random_username(length=8):
 
 async def _get_api_for_panel(panel_id: int) -> Optional[PanelAPI]:
     """Factory function to create an API object for a given panel ID."""
-    panel = await crud_panel.get_panel_by_id(panel_id)
-    if not panel: return None
-    if panel.panel_type.value == "marzban":
-        credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
-        return MarzbanPanel(credentials)
-    return None
+    try:
+        panel = await crud_panel.get_panel_by_id(int(panel_id)) # Ensure int
+        if not panel: 
+            LOGGER.error(f"Panel with ID {panel_id} not found in DB.")
+            return None
+            
+        # Check panel type case-insensitively
+        p_type = str(panel.panel_type.value).lower().strip()
+        
+        if p_type == "marzban":
+            credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
+            return MarzbanPanel(credentials)
+            
+        LOGGER.warning(f"Unsupported panel type: {p_type} for panel {panel_id}")
+        return None
+    except Exception as e:
+        LOGGER.error(f"Error creating API for panel {panel_id}: {e}")
+        return None
 
 async def add_user_to_panel_from_template(
     api: PanelAPI, panel_id: int, data_limit_gb: int, expire_days: int, username: Optional[str] = None, max_ips: Optional[int] = None
@@ -189,15 +201,25 @@ async def select_panel_for_creation(update: Update, context: ContextTypes.DEFAUL
 
 async def add_user_get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     username = normalize_username(update.message.text)
-    api = await _get_api_for_panel(context.user_data['panel_id'])
+    
+    # Ensure panel_id is an integer
+    panel_id = int(context.user_data.get('panel_id', 0))
+    
+    api = await _get_api_for_panel(panel_id)
     if not api:
+        # اگر اینجا خطا داد، یعنی مشکل جدی در شناسایی پنل وجود دارد
         await update.message.reply_text(_("panel_manager.add.panel_not_found"))
         return ConversationHandler.END
 
-    existing_user = await api.get_user_data(username)
-    if existing_user:
-        await update.message.reply_text(_("marzban.marzban_add_user.username_exists", username=username))
-        return GET_USERNAME
+    try:
+        existing_user = await api.get_user_data(username)
+        if existing_user:
+            await update.message.reply_text(_("marzban.marzban_add_user.username_exists", username=username))
+            return GET_USERNAME
+    except Exception as e:
+        LOGGER.error(f"Failed to check existing user: {e}")
+        await update.message.reply_text(f"Error checking user: {e}")
+        return ConversationHandler.END
     
     context.user_data['new_user']['username'] = username
     await update.message.reply_text(_("marzban.marzban_add_user.step2_ask_datalimit"))
@@ -265,9 +287,11 @@ async def add_user_create(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if new_user_data:
         marzban_username = new_user_data['username']
         await crud_bot_managed_user.add_to_managed_list(marzban_username)
-        
-        customer_id = context.user_data.get('customer_user_id', 0)
-        await crud_marzban_link.create_or_update_link(marzban_username, customer_id, panel_id)
+
+        customer_id = context.user_data.get('customer_user_id') # Step 1: Remove the default 0
+
+        if customer_id: # Step 2: Add a condition to check if customer_id exists
+            await crud_marzban_link.create_or_update_link(marzban_username, customer_id, panel_id)
         
         await crud_user_note.create_or_update_user_note(
             marzban_username=marzban_username, duration=user_info['expire_days'],

@@ -17,6 +17,7 @@ LOGGER = logging.getLogger(__name__)
 async def set_template_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     from shared.translator import _
     query = update.callback_query
+    print(f"!!!!!!!!!!!!!!!!! RECEIVED CALLBACK DATA: {query.data} !!!!!!!!!!!!!!!!!")
     await query.answer()
 
     try:

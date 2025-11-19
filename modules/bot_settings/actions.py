@@ -363,7 +363,7 @@ async def back_to_management_menu(update: Update, context: ContextTypes.DEFAULT_
     return ConversationHandler.END
 
 
-async def show_settings_and_tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def end_conv_and_show_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Displays the main 'Settings & Tools' menu to the admin
     and ends any conversation that led here.
@@ -396,3 +396,13 @@ async def toggle_auto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Rebuild and show the menu with the updated button
     await _build_and_send_main_settings_menu(update, context)
     return MENU_STATE
+
+async def show_settings_and_tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Just displays the 'Settings & Tools' menu without ending any conversation."""
+    from shared.keyboards import get_settings_and_tools_keyboard
+    from shared.translator import translator
+    
+    await update.message.reply_text(
+        translator.get("bot_settings.welcome_to_settings_and_tools"),
+        reply_markup=get_settings_and_tools_keyboard()
+    )

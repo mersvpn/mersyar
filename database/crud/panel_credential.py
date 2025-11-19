@@ -29,7 +29,13 @@ async def add_panel(panel_data: Dict[str, Any]) -> Optional[PanelCredential]:
     """Adds a new panel to the database and invalidates the cache."""
     async with get_session() as session:
         try:
-            new_panel = PanelCredential(**panel_data)
+            new_panel = PanelCredential(
+            name=panel_data['name'],
+            panel_type=panel_data['panel_type'],
+            api_url=panel_data['api_url'],
+            username=panel_data['username'],
+            password=panel_data['password']
+        )
             session.add(new_panel)
             await session.commit()
             await session.refresh(new_panel)
@@ -43,6 +49,7 @@ async def add_panel(panel_data: Dict[str, Any]) -> Optional[PanelCredential]:
 # --- START: Replace the get_all_panels function in database/crud/panel_credential.py ---
 
 async def get_all_panels(exclude_ids: Optional[List[int]] = None) -> List[PanelCredential]:
+    print(f"!!!!!!!!!!!! GETTING ALL PANELS CALLED AT {time.time()} !!!!!!!!!!!!")
     """
     Retrieves all configured panels from the database, using a simple time-based cache.
     Can optionally exclude a list of panel IDs from the result.

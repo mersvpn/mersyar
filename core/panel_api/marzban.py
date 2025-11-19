@@ -1,9 +1,9 @@
-# FILE: core/panel_api/marzban.py (NEW FILE)
+# FILE: core/panel_api/marzban.py (CLEANED VERSION - NO DEBUG LOGS)
 
 import httpx
 import logging
 import asyncio
-from typing import Tuple, Dict, Any, Optional, Union, List
+from typing import Tuple, Dict, Any, Optional, List
 
 from .base import PanelAPI
 
@@ -17,7 +17,7 @@ class MarzbanPanel(PanelAPI):
 
     async def _get_token(self) -> Optional[str]:
         """Gets an authentication token from the Marzban API."""
-        url = f"{self.api_url}/api/admin/token"
+        url = f"{self.api_url.rstrip('/')}/api/admin/token"
         payload = {'username': self.username, 'password': self.password}
         
         for attempt in range(3):
@@ -34,9 +34,10 @@ class MarzbanPanel(PanelAPI):
         """Performs a generic API request to the Marzban panel."""
         token = await self._get_token()
         if not token:
+            LOGGER.error(f"API Request Failed: Could not authenticate with panel {self.api_url}")
             return {"error": "Authentication failed"}
-        
-        url = f"{self.api_url}{endpoint}"
+
+        url = f"{self.api_url.rstrip('/')}{endpoint}"
         headers = {"Authorization": f"Bearer {token}", **kwargs.pop('headers', {})}
 
         for attempt in range(3):
@@ -45,12 +46,21 @@ class MarzbanPanel(PanelAPI):
                 response.raise_for_status()
                 return response.json() if response.content else {"success": True}
             except httpx.HTTPStatusError as e:
+                # Retry only on server errors (5xx)
                 if 500 <= e.response.status_code < 600:
                     await asyncio.sleep(attempt + 1)
                     continue
-                error_detail = e.response.json().get("detail", "Client error")
+                
+                try:
+                    error_detail = e.response.json().get("detail", "Client error")
+                except Exception:
+                    error_detail = e.response.text
+                
+                # Log client errors (4xx) but don't retry excessively
+                LOGGER.warning(f"API Error {e.response.status_code} on {method} {url}: {error_detail}")
                 return {"error": error_detail, "status_code": e.response.status_code}
-            except httpx.RequestError:
+            except httpx.RequestError as e:
+                LOGGER.warning(f"Network error on attempt {attempt + 1} for {url}: {e}")
                 await asyncio.sleep(attempt + 1)
         
         return {"error": "Network error or persistent server issue"}
@@ -98,14 +108,6 @@ class MarzbanPanel(PanelAPI):
             return True, "Traffic reset successfully."
         return False, response.get("error", "Unknown error")
 
-    async def close_marzban_client():
-        """Closes the shared httpx client for Marzban."""
-        if not _client.is_closed:
-            await _client.aclose()
-            LOGGER.info("Marzban HTTPX client has been closed.")
-
-    # در انتهای کلاس MarzbanPanel در فایل core/panel_api/marzban.py
-
     async def revoke_subscription(self, username: str) -> Tuple[bool, Any]:
         """Revokes and regenerates the subscription link for a user."""
         response = await self._api_request("POST", f"/api/user/{username}/revoke_sub")
@@ -113,15 +115,6 @@ class MarzbanPanel(PanelAPI):
             return True, response
         return False, response.get("error", "Unknown error")
     
-    # ADD THIS METHOD TO THE END OF THE MarzbanPanel CLASS
-    async def revoke_subscription(self, username: str) -> Tuple[bool, Any]:
-        """Revokes and regenerates the subscription link for a user."""
-        response = await self._api_request("POST", f"/api/user/{username}/revoke_sub")
-        if "error" not in response:
-            return True, response
-        return False, response.get("error", "Unknown error")
-    
-    # ADD THIS FUNCTION TO THE END OF core/panel_api/marzban.py
 
 async def close_marzban_client():
     """Closes the shared httpx client for Marzban."""

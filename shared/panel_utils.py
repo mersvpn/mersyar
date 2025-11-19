@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 from core.panel_api.base import PanelAPI
 from core.panel_api.marzban import MarzbanPanel
 from database.crud import panel_credential as crud_panel
+from database.models.panel_credential import PanelType
 
 LOGGER = logging.getLogger(__name__)
 
@@ -12,7 +13,7 @@ LOGGER = logging.getLogger(__name__)
 
 async def _get_api_for_panel(panel) -> Optional[PanelAPI]:
     """Factory to create an API object from a panel DB object."""
-    if panel.panel_type.value == "marzban":
+    if panel.panel_type == PanelType.MARZBAN:
         credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
         return MarzbanPanel(credentials)
     return None

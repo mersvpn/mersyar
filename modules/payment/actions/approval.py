@@ -9,6 +9,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from decimal import Decimal
+from database.models.panel_credential import PanelType
 
 from database.crud import (
     pending_invoice as crud_invoice,
@@ -18,6 +19,7 @@ from database.crud import (
     panel_credential as crud_panel,
     bot_managed_user as crud_bot_managed_user
 )
+from shared.keyboards import get_customer_main_menu_keyboard
 from core.panel_api.base import PanelAPI
 from core.panel_api.marzban import MarzbanPanel
 from modules.marzban.actions import helpers as marzban_helpers
@@ -34,7 +36,7 @@ async def _get_api_for_panel(panel_id: int) -> Optional[PanelAPI]:
         LOGGER.error(f"Panel with ID {panel_id} not found.")
         return None
     
-    if panel.panel_type.value == "marzban":
+    if panel.panel_type == PanelType.MARZBAN:
         credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
         return MarzbanPanel(credentials)
     
@@ -146,6 +148,9 @@ async def _approve_new_user_creation(context: ContextTypes.DEFAULT_TYPE, invoice
     await crud_marzban_link.create_or_update_link(marzban_username, customer_id, panel_id)
     await crud_invoice.update_invoice_status(invoice_id, 'approved')
     
+    # دریافت کیبورد مشتری
+    customer_keyboard = await get_customer_main_menu_keyboard(customer_id)
+
     try:
         subscription_url = new_user_data.get('subscription_url')
         if subscription_url:
@@ -165,9 +170,11 @@ async def _approve_new_user_creation(context: ContextTypes.DEFAULT_TYPE, invoice
             caption += _("financials_payment.user_creation_success_link_guide")
             caption += _("financials_payment.user_creation_success_qr_guide")
             
-            await context.bot.send_photo(chat_id=customer_id, photo=bio, caption=caption, parse_mode=ParseMode.MARKDOWN)
+            # ✨ FIX: Added reply_markup
+            await context.bot.send_photo(chat_id=customer_id, photo=bio, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=customer_keyboard)
         else:
-            await context.bot.send_message(customer_id, _("financials_payment.user_creation_fallback_message", username=f"`{marzban_username}`"), parse_mode=ParseMode.MARKDOWN)
+            # ✨ FIX: Added reply_markup
+            await context.bot.send_message(customer_id, _("financials_payment.user_creation_fallback_message", username=f"`{marzban_username}`"), parse_mode=ParseMode.MARKDOWN, reply_markup=customer_keyboard)
     except Exception as e:
         LOGGER.error(f"Failed to send success message to customer {customer_id} for invoice #{invoice_id}: {e}", exc_info=True)
     
@@ -209,11 +216,13 @@ async def _approve_renewal(context: ContextTypes.DEFAULT_TYPE, invoice: PendingI
     data_limit_gb = data_limit_gb or 0
     
     try:
+        # ✨ FIX: Added reply_markup
         await context.bot.send_message(
             customer_id,
             _("financials_payment.renewal_success_customer", 
               username=f"<code>{username}</code>", days=renewal_days, gb=data_limit_gb),
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.HTML,
+            reply_markup=await get_customer_main_menu_keyboard(customer_id)
         )
     except Exception as e:
         LOGGER.error(f"Failed to send renewal confirmation to customer {customer_id}: {e}")
@@ -243,11 +252,13 @@ async def _approve_wallet_charge(context: ContextTypes.DEFAULT_TYPE, invoice: Pe
     if new_balance is not None:
         await crud_invoice.update_invoice_status(invoice_id, 'approved')
         try:
+            # ✨ FIX: Added reply_markup
             await context.bot.send_message(
                 customer_id,
                 _("financials_payment.wallet_charge_success_customer", 
                   amount=f"{int(amount_to_add):,}", new_balance=f"{int(new_balance):,}"),
-                parse_mode=ParseMode.HTML
+                parse_mode=ParseMode.HTML,
+                reply_markup=await get_customer_main_menu_keyboard(customer_id)
             )
         except Exception as e:
             LOGGER.error(f"Failed to send wallet charge confirmation to customer {customer_id}: {e}")
@@ -289,7 +300,13 @@ async def _approve_data_top_up(context: ContextTypes.DEFAULT_TYPE, invoice: Pend
         LOGGER.info(f"Admin {admin_user.id} approved data top-up for '{marzban_username}' (Invoice #{invoice_id}).")
         
         try:
-            await context.bot.send_message(customer_id, _("financials_payment.data_top_up_customer_success", id=f"<code>{invoice_id}</code>", gb=f"<b>{data_gb_to_add}</b>"), parse_mode=ParseMode.HTML)
+            # ✨ FIX: Added reply_markup
+            await context.bot.send_message(
+                customer_id, 
+                _("financials_payment.data_top_up_customer_success", id=f"<code>{invoice_id}</code>", gb=f"<b>{data_gb_to_add}</b>"), 
+                parse_mode=ParseMode.HTML,
+                reply_markup=await get_customer_main_menu_keyboard(customer_id)
+            )
         except Exception as e:
             LOGGER.error(f"Failed to send data top-up confirmation to customer {customer_id}: {e}")
 
