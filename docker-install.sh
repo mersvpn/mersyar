@@ -86,7 +86,7 @@ echo "Creating archive: \$BACKUP_FILENAME..."
 tar -czf "\$BACKUP_FILENAME" "\$DB_DUMP_FILENAME" .env
 
 echo "Sending backup to Telegram..."
-HTTP_CODE=\$(curl -s -o /dev/null -w "%{http_code}" -F "chat_id=\$CHAT_ID" -F "document=@\$BACKUP_FILENAME" -F "caption=Mersyar-Bot Backup (\${DB_NAME}) - \$(date)" "https://api.telegram.org/bot\$BOT_TOKEN/sendDocument")
+HTTP_CODE=\$(curl -s -o /dev/null -w "%{http_code}" -F "chat_id=\$CHAT_ID" -F "document=@\$BACKUP_FILENAME" -F "caption=mersyar Backup (\${DB_NAME}) - \$(date)" "https://api.telegram.org/bot\$BOT_TOKEN/sendDocument")
 
 if [ "\$HTTP_CODE" -eq 200 ]; then
     echo "Backup sent successfully."
@@ -147,12 +147,12 @@ manage_bot() {
        cd "$PROJECT_DIR"
        case $1 in
            1)
-               info "Tailing logs for mersyar-bot. Press Ctrl+C to exit."
+               info "Tailing logs for mersyar. Press Ctrl+C to exit."
                docker compose logs -f bot
                show_menu
                ;;
            2)
-               info "Restarting mersyar-bot container..."
+               info "Restarting mersyar container..."
                if docker compose restart bot; then success "Bot restarted."; else error "Failed to restart bot."; fi
                show_menu
                ;;
@@ -192,14 +192,14 @@ manage_bot() {
                 
                 # Robust wait loop
                 for i in {1..10}; do
-                    if docker compose ps | grep 'mersyar-bot' | grep -q 'running'; then
+                    if docker compose ps | grep 'mersyar' | grep -q 'running'; then
                         info "Bot container is running. Proceeding with migration."
                         break
                     fi
                     info "Waiting... ($i/10)"; sleep 3
                 done
                 
-                if ! docker compose ps | grep 'mersyar-bot' | grep -q 'running'; then
+                if ! docker compose ps | grep 'mersyar' | grep -q 'running'; then
                     error "Bot container did not start correctly after 30 seconds."
                     error "Migration skipped. Please check logs with option 1."
                     show_menu; return
@@ -266,7 +266,7 @@ manage_bot() {
 # ==============================================================================
 install_bot() {
     info "==============================================="
-    info "      Mersyar-Bot Docker Installer"
+    info "      mersyar Docker Installer"
     info "==============================================="
 
     # --- 1. Install Dependencies ---
@@ -333,7 +333,7 @@ RUN apt-get update && apt-get install -y wget tar && rm -rf /var/lib/apt/lists/*
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 ARG GITHUB_USER="mersvpn"
-ARG GITHUB_REPO="mersyar-bot"
+ARG GITHUB_REPO="mersyar"
 WORKDIR /app
 # Download and extract the latest release
 RUN LATEST_TAG=$(wget -qO- "https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/') && \
@@ -354,7 +354,7 @@ EOF
 services:
   bot:
     build: .
-    container_name: mersyar-bot
+    container_name: mersyar
     restart: unless-stopped
     ports:
       - "127.0.0.1:8081:8081"
@@ -415,14 +415,14 @@ EOF
 
     info "Waiting for the bot container to become ready..."
     for i in {1..10}; do
-        if docker compose ps | grep 'mersyar-bot' | grep -q 'running'; then
+        if docker compose ps | grep 'mersyar' | grep -q 'running'; then
             info "Bot container is running. Proceeding with migration."
             break
         fi
         info "Waiting... ($i/10)"; sleep 3
     done
 
-    if ! docker compose ps | grep 'mersyar-bot' | grep -q 'running'; then
+    if ! docker compose ps | grep 'mersyar' | grep -q 'running'; then
         error "Bot container did not start correctly. Installation failed."
         exit 1
     fi
@@ -485,7 +485,7 @@ EOF
     info "[6/7] Configuring Nginx reverse proxy with SSL..."
     if ! command -v nginx &> /dev/null; then warning "Nginx not found. Installing..." && apt-get update -y > /dev/null && apt-get install -y nginx > /dev/null; fi
     
-    NGINX_CONF="/etc/nginx/sites-available/mersyar-bot"
+    NGINX_CONF="/etc/nginx/sites-available/mersyar"
     SSL_KEY_PATH="/etc/letsencrypt/live/${BOT_DOMAIN}/privkey.pem"
 
     info "-> Creating Nginx configuration file..."
@@ -533,14 +533,14 @@ EOF
     # ==============================================================================
 
     info "Fetching installed version details..."
-    LATEST_TAG=$(wget -qO- "https://api.github.com/repos/mersvpn/mersyar-bot/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    LATEST_TAG=$(wget -qO- "https://api.github.com/repos/mersvpn/mersyar/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
     if [ -z "$LATEST_TAG" ]; then
         LATEST_TAG="N/A"
     fi
 
     # --- Installation Summary ---
     success "==============================================="
-    success "✅✅✅ Mersyar-Bot Docker Installation Complete! ✅✅✅"
+    success "✅✅✅ mersyar Docker Installation Complete! ✅✅✅"
     info "You can now manage your bot by running the 'mersyar' command."
     echo ""
     echo -e "\e[36m📦 Bot Version Installed:\e[0m ${LATEST_TAG}"

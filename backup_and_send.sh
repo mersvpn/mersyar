@@ -1,5 +1,5 @@
 #!/bin/bash
-source "/root/mersyar-bot/.env"
+source "/root/mersyar/.env"
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 BACKUP_FILE="/tmp/backup-${DB_NAME}-${TIMESTAMP}.sql.gz"
 export MYSQL_PWD="$DB_PASSWORD"

@@ -1,12 +1,12 @@
 <div align="center">
 
-# Mersyar-Bot 🤖
+# mersyar 🤖
 
 ### ربات تلگرام پیشرفته برای مدیریت هوشمند پنل مرزبان
 
-![GitHub release (latest by date)](https://img.shields.io/github/v/release/mersvpn/mersyar-bot?style=for-the-badge&color=blue)
-![GitHub last commit](https://img.shields.io/github/last-commit/mersvpn/mersyar-bot?style=for-the-badge&color=brightgreen)
-![GitHub stars](https://img.shields.io/github/stars/mersvpn/mersyar-bot?style=for-the-badge&color=gold)
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/mersvpn/mersyar?style=for-the-badge&color=blue)
+![GitHub last commit](https://img.shields.io/github/last-commit/mersvpn/mersyar?style=for-the-badge&color=brightgreen)
+![GitHub stars](https://img.shields.io/github/stars/mersvpn/mersyar?style=for-the-badge&color=gold)
 
 **mersyar bot** یک راهکار جامع و قدرتمند برای مدیریت کامل کاربران پنل **[Marzban](https://github.com/Gozargah/Marzban)** از طریق تلگرام است. این ربات با معماری ماژولار، قابلیت‌های گسترده و نصب آسان، فرآیند فروش و پشتیبانی از کاربران را برای شما خودکار و لذت‌بخش می‌کند.
 
@@ -98,7 +98,7 @@
 این روش ربات و تمام نیازمندی‌های آن را در محیط ایزوله داکر نصب می‌کند. این روش پایدارتر است و از تداخل با سایر سرویس‌های روی سرور شما جلوگیری می‌کند.
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/mersvpn/mersyar-bot/main/docker-install.sh)
+bash <(curl -sL https://raw.githubusercontent.com/mersvpn/mersyar/main/docker-install.sh)
 ```
 پس از نصب، می‌توانید با دستور `mersyar` ربات خود را مدیریت کنید.
 
@@ -109,7 +109,7 @@ bash <(curl -sL https://raw.githubusercontent.com/mersvpn/mersyar-bot/main/docke
 **توجه:** این روش ممکن است با سایر سرویس‌های روی سرور شما (مانند پنل مرزبان) تداخل داشته باشد. فقط در صورتی از این روش استفاده کنید که سرور شما کاملاً خالی باشد.
 
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/mersvpn/mersyar-bot/main/install.sh && chmod +x install.sh && ./install.sh
+wget -O install.sh https://raw.githubusercontent.com/mersvpn/mersyar/main/install.sh && chmod +x install.sh && ./install.sh
 ```
 
 
@@ -127,7 +127,7 @@ wget -O install.sh https://raw.githubusercontent.com/mersvpn/mersyar-bot/main/in
 
 پس از نصب، یک ابزار مدیریتی ساده و کاربردی در خط فرمان سرور شما فعال می‌شود. کافیست در هر مسیری از ترمینال، دستور `mersyar` را تایپ و اجرا کنید تا منوی زیر برای شما نمایش داده شود:
 
-![Mersyar CLI Menu](https://raw.githubusercontent.com/mersvpn/mersyar-bot/main/mersyar-cli.png)
+![Mersyar CLI Menu](https://raw.githubusercontent.com/mersvpn/mersyar/main/mersyar-cli.png)
 
 این منو به شما اجازه می‌دهد تا کارهای مدیریتی اصلی را بدون نیاز به دستورات پیچیده `docker` انجام دهید:
 -   **نصب مجدد (Re-install):** اگر در مراحل نصب با مشکلی مواجه شدید، می‌توانید کل فرآیند را تکرار کنید.

@@ -15,7 +15,7 @@ fi
 
 # --- Static Config ---
 GITHUB_USER="mersvpn"
-GITHUB_REPO="mersyar-bot"
+GITHUB_REPO="mersyar"
 
 info "Fetching latest release info..."
 LATEST_TAG=$(wget -qO- "https://api.github.com/repos/$GITHUB_USER/$GITHUB_REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
@@ -26,11 +26,11 @@ fi
 DOWNLOAD_URL="https://github.com/$GITHUB_USER/$GITHUB_REPO/archive/refs/tags/$LATEST_TAG.tar.gz"
 
 info "==============================================="
-info "      Mersyar-Bot Universal Installer"
+info "      mersyar Universal Installer"
 info "Latest Version: $LATEST_TAG"
 
 PROJECT_DIR="/root/$GITHUB_REPO"
-SERVICE_NAME="mersyar-bot"
+SERVICE_NAME="mersyar"
 PYTHON_ALIAS="python3"
 TARBALL_NAME="${LATEST_TAG}.tar.gz"
 DB_NAME="mersyar_bot_db"
