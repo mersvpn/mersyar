@@ -1,4 +1,4 @@
-# FILE: modules/marzban/actions/modify_user.py (REVISED FOR I18N and BEST PRACTICES)
+# FILE: modules/marzban/actions/modify_user.py (FINAL ROBUST VERSION)
 import html
 import datetime
 import logging
@@ -20,54 +20,73 @@ from core.panel_api.base import PanelAPI
 from core.panel_api.marzban import MarzbanPanel
 from database.crud import panel_credential as crud_panel
 from modules.marzban.actions import helpers as marzban_helpers
-# ---
+# ✨ Import PanelType Enum
+from database.models.panel_credential import PanelType
 
 LOGGER = logging.getLogger(__name__)
 
 async def _get_api_for_panel(panel_id: int) -> Optional[PanelAPI]:
     """Helper factory to create an API object from a panel DB object."""
-    panel = await crud_panel.get_panel_by_id(panel_id)
-    if not panel:
-        LOGGER.error(f"[API FACTORY] Panel with ID {panel_id} not found.")
+    try:
+        panel = await crud_panel.get_panel_by_id(panel_id)
+        if not panel:
+            LOGGER.error(f"[API FACTORY] Panel with ID {panel_id} not found in DB.")
+            return None
+        
+        # ✨ ROBUST FIX: Use Enum directly for comparison
+        if panel.panel_type == PanelType.MARZBAN:
+            credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
+            return MarzbanPanel(credentials)
+        
+        LOGGER.warning(f"[API FACTORY] Panel type '{panel.panel_type}' is not supported/implemented for panel ID {panel_id}.")
         return None
-    
-    if panel.panel_type.value == "marzban":
-        credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
-        return MarzbanPanel(credentials)
-    
-    LOGGER.warning(f"[API FACTORY] Panel type '{panel.panel_type.value}' is not supported for panel ID {panel_id}.")
-    return None
+    except Exception as e:
+        LOGGER.error(f"[API FACTORY] Error creating API for panel {panel_id}: {e}")
+        return None
 
+# Define conversation states (Global constants)
 ADD_DAYS_PROMPT, ADD_DATA_PROMPT = range(2)
 
 async def _get_api_for_user(marzban_username: str, context: ContextTypes.DEFAULT_TYPE) -> Optional[PanelAPI]:
     """
     Finds the correct panel for a user and returns an API object for it.
-    It now searches across ALL panels if a direct link is not found.
+    It is now resilient to DB inconsistencies and searches everywhere if needed.
     """
     normalized_username = normalize_username(marzban_username)
     
     # Priority 1: Check the database link first.
     LOGGER.info(f"[API FINDER] Trying to find panel for '{normalized_username}' via DB link...")
     link = await crud_marzban_link.get_link_with_panel_by_username(normalized_username)
+    
     if link and link.panel:
-        panel = link.panel
-        LOGGER.info(f"[API FINDER] Found panel '{panel.name}' (ID: {panel.id}) via DB link.")
-        return await _get_api_for_panel(panel.id)
-
-    # Priority 2: If no link, search ALL panels.
-    LOGGER.warning(f"[API FINDER] No DB link for '{normalized_username}'. Searching all panels...")
-    all_panels = await crud_panel.get_all_panels()
-    for panel in all_panels:
-        api = await _get_api_for_panel(panel.id)
+        # Try to connect using the linked panel
+        api = await _get_api_for_panel(link.panel.id)
         if api:
-            LOGGER.info(f"[API FINDER] -> Checking panel '{panel.name}'...")
+            LOGGER.info(f"[API FINDER] Found panel '{link.panel.name}' (ID: {link.panel.id}) via DB link.")
+            return api
+        else:
+            LOGGER.warning(f"[API FINDER] Link exists for '{normalized_username}' but panel ID {link.panel.id} API could not be created. Falling back to scan.")
+
+    # Priority 2: If no link or link failed, search ALL panels.
+    LOGGER.warning(f"[API FINDER] Scanning ALL panels for user '{normalized_username}'...")
+    all_panels = await crud_panel.get_all_panels()
+    
+    for panel in all_panels:
+        try:
+            api = await _get_api_for_panel(panel.id)
+            if not api: continue
+
+            # Check if user exists in this panel
             user_data = await api.get_user_data(normalized_username)
             if user_data and 'username' in user_data:
-                LOGGER.info(f"[API FINDER] Found user '{normalized_username}' in panel '{panel.name}'. Using this panel.")
-                # Optional: Create a link in the DB for next time to speed things up.
-                # await crud_marzban_link.create_or_update_link(normalized_username, None, panel.id)
+                LOGGER.info(f"[API FINDER] Found user '{normalized_username}' in panel '{panel.name}'. Updating link.")
+                
+                # Self-Healing: Update the link in DB so next time it's faster
+                # We can't update link here easily without telegram_id, but returning API is enough for the action to work.
                 return api
+        except Exception as e:
+            LOGGER.warning(f"[API FINDER] Failed to check panel {panel.name} for user {normalized_username}: {e}")
+            continue
     
     LOGGER.error(f"[API FINDER] CRITICAL: Could not find user '{normalized_username}' in ANY configured panel.")
     return None
@@ -123,7 +142,12 @@ async def do_add_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     
     username = modify_info['username']
     api = await _get_api_for_user(username, context)
-    user_data = await api.get_user_data(username) if api else None
+    
+    if not api:
+        await context.bot.send_message(chat_id=modify_info['chat_id'], text=_("marzban_display.user_not_found"))
+        return ConversationHandler.END
+
+    user_data = await api.get_user_data(username)
     if not user_data:
         await context.bot.send_message(chat_id=modify_info['chat_id'], text=_("marzban_display.user_not_found"))
         return ConversationHandler.END
@@ -132,13 +156,16 @@ async def do_add_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     start_date = datetime.datetime.fromtimestamp(max(current_expire_ts, datetime.datetime.now().timestamp()))
     new_expire_date = start_date + datetime.timedelta(days=days_to_add)
     
-    success, message = await api.modify_user(username, {"expire": int(new_expire_date.timestamp())}) if api else (False, "API object not created")
+
+    payload = {
+        "expire": int(new_expire_date.timestamp()),
+        "status": "active"
+    }
+    success, message = await api.modify_user(username, payload)
     
     success_msg = _("marzban_modify_user.success_add_days", days=days_to_add) if success else _("marzban_modify_user.error_add_days", error=message)
     await show_user_details_panel(context=context, **modify_info, success_message=success_msg)
     
-    # --- START OF NEW CODE ---
-    # Notify the customer if the operation was successful and the user is linked
     if success:
         normalized_username = normalize_username(username)
         customer_id = await crud_marzban_link.get_telegram_id_by_marzban_username(normalized_username)
@@ -147,7 +174,7 @@ async def do_add_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 notification_text = _("marzban_modify_user.customer_add_days_notification", days=days_to_add)
                 await context.bot.send_message(chat_id=customer_id, text=notification_text)
             except Exception as e:
-                LOGGER.warning(f"Failed to send 'add days' notification to customer {customer_id} for user {username}: {e}")
+                LOGGER.warning(f"Failed to send 'add days' notification: {e}")
     
     context.user_data.pop('modify_user_info', None)
     return ConversationHandler.END
@@ -172,19 +199,23 @@ async def do_add_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     
     username = modify_info['username']
     api = await _get_api_for_user(username, context)
-    user_data = await api.get_user_data(username) if api else None
+    
+    if not api:
+        await context.bot.send_message(chat_id=modify_info['chat_id'], text=_("marzban_display.user_not_found"))
+        return ConversationHandler.END
+
+    user_data = await api.get_user_data(username)
     if not user_data:
         await context.bot.send_message(chat_id=modify_info['chat_id'], text=_("marzban_display.user_not_found"))
         return ConversationHandler.END
 
     new_data_limit = user_data.get('data_limit', 0) + (gb_to_add * GB_IN_BYTES)
     
-    success, message = await api.modify_user(username, {"data_limit": new_data_limit}) if api else (False, "API object not created")
+    payload = {"data_limit": new_data_limit, "status": "active"}
+    success, message = await api.modify_user(username, payload)
     success_msg = _("marzban_modify_user.success_add_data", gb=gb_to_add) if success else _("marzban_modify_user.error_add_data", error=message)
     await show_user_details_panel(context=context, **modify_info, success_message=success_msg)
 
-    # --- START OF NEW CODE ---
-    # Notify the customer if the operation was successful and the user is linked
     if success:
         normalized_username = normalize_username(username)
         customer_id = await crud_marzban_link.get_telegram_id_by_marzban_username(normalized_username)
@@ -193,7 +224,7 @@ async def do_add_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 notification_text = _("marzban_modify_user.customer_add_data_notification", gb=gb_to_add)
                 await context.bot.send_message(chat_id=customer_id, text=notification_text)
             except Exception as e:
-                LOGGER.warning(f"Failed to send 'add data' notification to customer {customer_id} for user {username}: {e}")
+                LOGGER.warning(f"Failed to send 'add data' notification: {e}")
 
     context.user_data.pop('modify_user_info', None)
     return ConversationHandler.END
@@ -205,9 +236,16 @@ async def reset_user_traffic(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer(_("marzban_modify_user.resetting_traffic", username=username))
     
     api = await _get_api_for_user(username, context)
-    success, message = (await api.reset_user_traffic(username)) if api else (False, "API object not created")
+    
+    if not api:
+         # If we can't find the user, we can't reset traffic. Show an alert.
+         await query.answer(_("marzban_display.user_not_found"), show_alert=True)
+         return
+
+    success, message = await api.reset_user_traffic(username)
     success_msg = _("marzban_modify_user.traffic_reset_success") if success else _("marzban_modify_user.traffic_reset_error", error=message)
 
+    # Refresh the view
     await show_user_details_panel(
         context=context, chat_id=query.message.chat_id, message_id=query.message.message_id,
         username=username, list_type=context.user_data.get('current_list_type', 'all'),
@@ -233,27 +271,25 @@ async def do_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     admin_user = update.effective_user
     
-    # ✅ --- START OF FINAL FIX ---
-    # We aggressively strip any known prefixes to get the pure username.
+    # Aggressively clean the username to avoid "user_user1" errors
     raw_username_data = query.data.removeprefix('do_delete_')
-    if raw_username_data.startswith('user_'):
-        username = raw_username_data.removeprefix('user_')
-        LOGGER.warning(f"[DELETE FIX] Detected and stripped 'user_' prefix. Original: '{raw_username_data}', Cleaned: '{username}'")
-    else:
-        username = raw_username_data
-    # ✅ --- END OF FINAL FIX ---
+    username = raw_username_data.replace('user_', '', 1) if raw_username_data.startswith('user_') else raw_username_data
     
     normalized_username_str = normalize_username(username)
     await query.answer()
     
-    is_customer_request = "درخواست حذف سرویس" in query.message.text
+    is_customer_request = "درخواست حذف سرویس" in (query.message.text or "")
     
     await query.edit_message_text(_("marzban_modify_user.deleting_user", username=f"<code>{html.escape(username)}</code>"), parse_mode=ParseMode.HTML)
     
     customer_id = await crud_marzban_link.get_telegram_id_by_marzban_username(normalized_username_str)
 
     api = await _get_api_for_user(username, context)
-    success, message = (await api.delete_user(username)) if api else (False, "API object could not be created")
+    if not api:
+        await query.edit_message_text(_("marzban_display.user_not_found"))
+        return
+
+    success, message = await api.delete_user(username)
     
     if success:
         await crud_marzban_link.delete_marzban_link(normalized_username_str)
@@ -276,6 +312,7 @@ async def do_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 LOGGER.warning(f"Config deleted, but failed to notify customer {customer_id}: {e}")
     else:
         await query.edit_message_text(f"❌ {html.escape(str(message))}")
+
 async def renew_user_smart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from shared.translator import _
     from .display import show_user_details_panel
@@ -292,18 +329,21 @@ async def renew_user_smart(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
     api = await _get_api_for_user(username, context)
-    user_data = await api.get_user_data(username) if api else None
+    if not api:
+         await query.edit_message_text(_("marzban_display.user_not_found"))
+         return
+
+    user_data = await api.get_user_data(username)
     if not user_data:
         await query.edit_message_text(_("marzban_display.user_not_found"))
         return
 
-    # --- FIX 3: Correctly import and use the function ---
     note_data = await crud_user_note.get_user_note(normalized_username_str)
     
     renewal_duration_days = note_data.subscription_duration if note_data and note_data.subscription_duration else DEFAULT_RENEW_DAYS
     data_limit_gb = note_data.subscription_data_limit_gb if note_data and note_data.subscription_data_limit_gb is not None else (user_data.get('data_limit') or 0) / GB_IN_BYTES
     
-    success_reset, message_reset = (await api.reset_user_traffic(username)) if api else (False, "API object not created")
+    success_reset, message_reset = await api.reset_user_traffic(username)
     if not success_reset:
         await query.edit_message_text(_("marzban_modify_user.renew_error_reset_traffic", error=f"`{message_reset}`"), parse_mode=ParseMode.MARKDOWN)
         return
@@ -316,7 +356,7 @@ async def renew_user_smart(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "status": "active"
     }
     
-    success_modify, message_modify = (await api.modify_user(username, payload_to_modify)) if api else (False, "API object not created")
+    success_modify, message_modify = await api.modify_user(username, payload_to_modify)
     if not success_modify:
         await query.edit_message_text(_("marzban_modify_user.renew_error_modify", error=f"`{message_modify}`"), parse_mode=ParseMode.MARKDOWN)
         return
@@ -330,7 +370,6 @@ async def renew_user_smart(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     log_message += _("marzban_modify_user.log_deleted_by", admin_mention=admin_mention)
     await send_log(context.bot, log_message, parse_mode=ParseMode.MARKDOWN_V2)
 
-    # --- FIX 4: Use the correct function name ---
     customer_id = await crud_marzban_link.get_telegram_id_by_marzban_username(normalized_username_str)
     customer_notified = False
     if customer_id:

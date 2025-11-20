@@ -11,6 +11,7 @@ from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
 from typing import Optional
+from database.models.panel_credential import PanelType
 
 # Local project imports
 from database.crud import (
@@ -37,7 +38,8 @@ ASK_USERNAME = 0
 
 async def _get_api_for_panel(panel) -> Optional[PanelAPI]:
     """Helper factory to create an API object from a panel DB object."""
-    if panel.panel_type.value == "marzban":
+    # اصلاح شده: استفاده از PanelType.MARZBAN برای مقایسه دقیق
+    if panel.panel_type == PanelType.MARZBAN:
         credentials = {'api_url': panel.api_url, 'username': panel.username, 'password': panel.password}
         return MarzbanPanel(credentials)
     return None
@@ -170,13 +172,17 @@ async def get_username_and_create_account(update: Update, context: ContextTypes.
         
     days_from_hours = hours / 24
 
-    new_user_data = await add_user_to_panel_from_template(
-        api=api, 
-        panel_id=panel_for_test.id,  # <--- این خط را اضافه کنید
-        data_limit_gb=gb, 
-        expire_days=days_from_hours, 
-        username=final_username
-    )
+    try:
+        new_user_data = await add_user_to_panel_from_template(
+            api=api, 
+            panel_id=panel_for_test.id,
+            data_limit_gb=gb, 
+            expire_days=days_from_hours, 
+            username=final_username
+        )
+    except Exception as e:
+        LOGGER.error(f"Failed to create user from template on panel {panel_for_test.name}: {e}")
+        new_user_data = None
 
     if not new_user_data:
         await processing_message.edit_text(translator.get("customer.test_account.api_failed"))

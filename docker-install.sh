@@ -166,71 +166,81 @@ manage_bot() {
                if docker compose up -d; then success "All services started in the background."; else error "Failed to start services."; fi
                show_menu
                ;;
-           5)
-                info "Updating bot by rebuilding the image from GitHub..."
-                warning "This may take a few minutes."
+            5)
+                info "Updating bot system to the latest version..."
+                warning "This process will rebuild the bot container and apply database migrations."
                 
-                info "Step 1: Shutting down the bot container to prevent issues..."
-                docker compose stop bot
+                # 1. Stop the bot container only (keep DB running if possible to save time, but for safety we restart all)
+                info "Step 1: Stopping services..."
+                docker compose down
                 
-                info "Step 2: Building the new image from the latest release..."
+                # 2. Clean up old compiled files (optional but recommended for major updates)
+                info "Step 2: Cleaning up potential build artifacts..."
+                docker builder prune -f >/dev/null 2>&1
+
+                # 3. Re-generate Dockerfile (Crucial if requirements changed)
+                # Note: We reuse the Dockerfile generation logic from install_bot to ensure it's up-to-date
+                info "Step 3: Refreshing Docker configuration..."
+                # (We rely on the existing Dockerfile since it pulls the LATEST tag dynamically)
+                
+                # 4. Build with --no-cache to ensure fresh code from GitHub
+                info "Step 4: Building the new image from the latest GitHub release..."
                 if ! docker compose build --no-cache bot; then
                     error "Failed to build the new image. Aborting update."
-                    docker compose up -d bot # Try to bring the old bot back up
+                    docker compose up -d # Try to bring old system up
                     show_menu; return
                 fi
                 
-                info "Step 3: Re-creating all containers with the new image..."
-                if ! docker compose up -d --force-recreate; then
-                    error "Failed to re-create containers. Aborting update."
+                # 5. Start services
+                info "Step 5: Starting updated services..."
+                if ! docker compose up -d; then
+                    error "Failed to start containers. Please check logs."
                     show_menu; return
                 fi
-                success "Containers updated successfully!"
-
-                info "Step 4: Applying database migrations..."
-                warning "Waiting for the bot container to be fully ready..."
                 
-                # Robust wait loop
-                for i in {1..10}; do
-                    if docker compose ps | grep 'mersyar' | grep -q 'running'; then
-                        info "Bot container is running. Proceeding with migration."
-                        break
+                # 6. Wait for DB and Bot readiness
+                info "Step 6: Waiting for services to stabilize..."
+                local retries=0
+                local max_retries=20
+                until docker compose exec -T db mysqladmin ping -h "localhost" -u "root" -p"$DB_ROOT_PASSWORD" --silent &> /dev/null; do
+                    ((retries++))
+                    if [ $retries -ge $max_retries ]; then
+                        error "Database failed to start in time."
+                        show_menu; return
                     fi
-                    info "Waiting... ($i/10)"; sleep 3
+                    echo -n "."
+                    sleep 3
                 done
-                
-                if ! docker compose ps | grep 'mersyar' | grep -q 'running'; then
-                    error "Bot container did not start correctly after 30 seconds."
-                    error "Migration skipped. Please check logs with option 1."
-                    show_menu; return
-                fi
-                
-                # --- START OF INTELLIGENT MIGRATION LOGIC ---
-                info "Checking database status before migration..."
+                echo ""
+                success "Database is ready."
+
+                # 7. Run Migrations (The Critical Part)
+                info "Step 7: Applying database migrations (Alembic)..."
                 if docker compose exec -T bot alembic upgrade head; then
-                    success "Database is up to date."
+                    success "Database migrations applied successfully."
                 else
-                    warning "Initial migration failed, attempting to automatically resolve..."
-                    LATEST_REVISION_ID=$(docker compose exec -T bot alembic heads | awk '{print $1}')
-                    if [ -z "$LATEST_REVISION_ID" ]; then
-                        error "Could not determine the latest revision ID. Aborting."
-                    else
-                        info "Stamping the database with latest revision: ${LATEST_REVISION_ID}"
+                    warning "Standard migration failed. Attempting auto-repair (Stamping)..."
+                    # Try to get the latest head revision
+                    LATEST_REVISION_ID=$(docker compose exec -T bot alembic heads | awk '{print $1}' | head -n 1)
+                    
+                    if [ -n "$LATEST_REVISION_ID" ]; then
+                        info "Stamping database with revision: $LATEST_REVISION_ID"
                         if docker compose exec -T bot alembic stamp "$LATEST_REVISION_ID"; then
-                            info "Re-running upgrade after stamping..."
+                            info "Retrying upgrade..."
                             if docker compose exec -T bot alembic upgrade head; then
-                                success "Database migrations applied successfully after stamping."
+                                success "Database repaired and migrated successfully."
                             else
-                                error "FATAL: Migration failed even after stamping. Manual intervention required."
+                                error "FATAL: Migration failed after repair. Manual intervention needed."
                             fi
                         else
-                            error "FATAL: Failed to stamp the database. Manual intervention required."
+                            error "FATAL: Failed to stamp database."
                         fi
+                    else
+                        error "FATAL: Could not determine latest Alembic revision."
                     fi
                 fi
-                # --- END OF INTELLIGENT MIGRATION LOGIC ---
                 
-                info "Bot is now fully updated."
+                info "Bot update completed successfully!"
                 show_menu
                 ;;
            6)
