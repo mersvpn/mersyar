@@ -89,12 +89,22 @@ class MarzbanPanel(PanelAPI):
     async def modify_user(self, username: str, settings: dict) -> Tuple[bool, str]:
         current_data = await self.get_user_data(username)
         if not current_data:
-            return False, f"User '{username}' not found."
-        
+            return False, f"User '{username}' not found."       
         for key in ['online_at', 'created_at', 'subscription_url', 'usages']:
             current_data.pop(key, None)
         
         updated_payload = {**current_data, **settings}
+        if 'status' in updated_payload:
+
+            raw_status = str(updated_payload['status']).lower().strip()
+            
+            if raw_status in ['active', 'disabled', 'on_hold']:
+                updated_payload['status'] = raw_status
+            else:
+
+                LOGGER.warning(f"Invalid status '{updated_payload['status']}' provided for user {username}. Ignoring status update.")
+                updated_payload.pop('status')
+        # --------------------------------------------------
         
         response = await self._api_request("PUT", f"/api/user/{username}", json=updated_payload)
         

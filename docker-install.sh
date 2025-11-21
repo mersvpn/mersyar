@@ -168,79 +168,31 @@ manage_bot() {
                ;;
             5)
                 info "Updating bot system to the latest version..."
-                warning "This process will rebuild the bot container and apply database migrations."
+                warning "This process will rebuild the bot container."
+                info "Note: Database migrations are now handled automatically by the container startup script."
                 
-                # 1. Stop the bot container only (keep DB running if possible to save time, but for safety we restart all)
-                info "Step 1: Stopping services..."
+                info "Step 1: Stopping current services..."
                 docker compose down
                 
-                # 2. Clean up old compiled files (optional but recommended for major updates)
-                info "Step 2: Cleaning up potential build artifacts..."
+                info "Step 2: Cleaning up build cache..."
                 docker builder prune -f >/dev/null 2>&1
-
-                # 3. Re-generate Dockerfile (Crucial if requirements changed)
-                # Note: We reuse the Dockerfile generation logic from install_bot to ensure it's up-to-date
-                info "Step 3: Refreshing Docker configuration..."
-                # (We rely on the existing Dockerfile since it pulls the LATEST tag dynamically)
                 
-                # 4. Build with --no-cache to ensure fresh code from GitHub
-                info "Step 4: Building the new image from the latest GitHub release..."
+                info "Step 3: Building new image (Downloading latest code from GitHub)..."
                 if ! docker compose build --no-cache bot; then
                     error "Failed to build the new image. Aborting update."
-                    docker compose up -d # Try to bring old system up
+                    info "Attempting to restart previous version..."
+                    docker compose up -d
                     show_menu; return
                 fi
                 
-                # 5. Start services
-                info "Step 5: Starting updated services..."
-                if ! docker compose up -d; then
-                    error "Failed to start containers. Please check logs."
-                    show_menu; return
-                fi
-                
-                # 6. Wait for DB and Bot readiness
-                info "Step 6: Waiting for services to stabilize..."
-                local retries=0
-                local max_retries=20
-                until docker compose exec -T db mysqladmin ping -h "localhost" -u "root" -p"$DB_ROOT_PASSWORD" --silent &> /dev/null; do
-                    ((retries++))
-                    if [ $retries -ge $max_retries ]; then
-                        error "Database failed to start in time."
-                        show_menu; return
-                    fi
-                    echo -n "."
-                    sleep 3
-                done
-                echo ""
-                success "Database is ready."
-
-                # 7. Run Migrations (The Critical Part)
-                info "Step 7: Applying database migrations (Alembic)..."
-                if docker compose exec -T bot alembic upgrade head; then
-                    success "Database migrations applied successfully."
+                info "Step 4: Starting services..."
+                if docker compose up -d; then
+                    success "Containers started successfully!"
+                    success "The bot is now initializing. Check logs (Option 1) to see the migration status."
                 else
-                    warning "Standard migration failed. Attempting auto-repair (Stamping)..."
-                    # Try to get the latest head revision
-                    LATEST_REVISION_ID=$(docker compose exec -T bot alembic heads | awk '{print $1}' | head -n 1)
-                    
-                    if [ -n "$LATEST_REVISION_ID" ]; then
-                        info "Stamping database with revision: $LATEST_REVISION_ID"
-                        if docker compose exec -T bot alembic stamp "$LATEST_REVISION_ID"; then
-                            info "Retrying upgrade..."
-                            if docker compose exec -T bot alembic upgrade head; then
-                                success "Database repaired and migrated successfully."
-                            else
-                                error "FATAL: Migration failed after repair. Manual intervention needed."
-                            fi
-                        else
-                            error "FATAL: Failed to stamp database."
-                        fi
-                    else
-                        error "FATAL: Could not determine latest Alembic revision."
-                    fi
+                    error "Failed to start services."
                 fi
                 
-                info "Bot update completed successfully!"
                 show_menu
                 ;;
            6)
@@ -336,26 +288,22 @@ DB_HOST="db"
 ADMIN_EMAIL="${ADMIN_EMAIL}"
 EOF
 
-    info "-> Creating Dockerfile..."
-    cat << 'EOF' > Dockerfile
-FROM python:3.10-slim-bookworm
-RUN apt-get update && apt-get install -y wget tar && rm -rf /var/lib/apt/lists/*
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-ARG GITHUB_USER="mersvpn"
-ARG GITHUB_REPO="mersyar"
-WORKDIR /app
-# Download and extract the latest release
-RUN LATEST_TAG=$(wget -qO- "https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/') && \
-    DOWNLOAD_URL="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/archive/refs/tags/${LATEST_TAG}.tar.gz" && \
-    wget -q "$DOWNLOAD_URL" -O latest_release.tar.gz && \
-    tar -xzf latest_release.tar.gz --strip-components=1 && \
-    rm latest_release.tar.gz
-# Install python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-# The CMD will be used to run the bot
-CMD ["python", "bot.py"]
-EOF
+    # --- DOWNLOAD SOURCE CODE FROM GITHUB ---
+    info "Downloading latest source code..."
+    GITHUB_USER="mersvpn"
+    GITHUB_REPO="mersyar"
+    
+    LATEST_TAG=$(wget -qO- "https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -z "$LATEST_TAG" ]; then
+        warning "Could not find latest release. Cloning master branch..."
+        git clone "https://github.com/${GITHUB_USER}/${GITHUB_REPO}.git" . || echo "Repo already exists."
+    else
+        info "Downloading version: $LATEST_TAG"
+        wget -q "https://github.com/${GITHUB_USER}/${GITHUB_REPO}/archive/refs/tags/${LATEST_TAG}.tar.gz" -O latest.tar.gz
+        tar -xzf latest.tar.gz --strip-components=1
+        rm latest.tar.gz
+    fi
+    # --------------------------------------------------
 
 
      # --- START OF CORRECTED CODE BLOCK ---

@@ -18,7 +18,11 @@ async def add_days_to_user(api: PanelAPI, username: str, days_to_add: int) -> Tu
     start_date = datetime.datetime.fromtimestamp(start_ts)
     new_expire_date = start_date + datetime.timedelta(days=days_to_add)
     
-    settings = {"expire": int(new_expire_date.timestamp())}
+    # ✨ FIX: Force status to active
+    settings = {
+        "expire": int(new_expire_date.timestamp()),
+        "status": "active"
+    }
     return await api.modify_user(username, settings)
 
 async def add_data_to_user(api: PanelAPI, username: str, data_gb: int) -> Tuple[bool, str]:
@@ -30,11 +34,16 @@ async def add_data_to_user(api: PanelAPI, username: str, data_gb: int) -> Tuple[
     current_limit_bytes = current_data.get('data_limit', 0)
     new_limit_bytes = current_limit_bytes + (data_gb * GB_IN_BYTES)
     
-    settings = {"data_limit": new_limit_bytes}
+    # ✨ FIX: Force status to active
+    settings = {
+        "data_limit": new_limit_bytes,
+        "status": "active"
+    }
     return await api.modify_user(username, settings)
 
 async def renew_user_subscription(api: PanelAPI, username: str, days_to_add: int) -> Tuple[bool, str]:
-    """Renews a user's subscription (resets traffic and adds days) using the API object."""
+    """Renews a user's subscription (resets traffic AND adds days) using the API object."""
+    # 1. محاسبه تاریخ جدید
     current_data = await api.get_user_data(username)
     if not current_data:
         return False, f"User '{username}' not found."
@@ -45,12 +54,22 @@ async def renew_user_subscription(api: PanelAPI, username: str, days_to_add: int
     
     start_date = datetime.datetime.fromtimestamp(start_ts)
     new_expire_date = start_date + datetime.timedelta(days=days_to_add)
-    
+
     settings = {
         "expire": int(new_expire_date.timestamp()),
-        "used_traffic": 0
+        "status": "active"
     }
-    return await api.modify_user(username, settings)
+
+    success, msg = await api.modify_user(username, settings)
+    if not success:
+        return False, msg
+
+    reset_success, reset_msg = await api.reset_user_traffic(username)
+    
+    if not reset_success:
+        return False, f"Date updated but Traffic Reset failed: {reset_msg}"
+        
+    return True, "User renewed and traffic reset successfully."
 
 async def format_user_info_for_customer(api: PanelAPI, username: str) -> str:
     """Formats user data into a user-friendly message, using the API object."""

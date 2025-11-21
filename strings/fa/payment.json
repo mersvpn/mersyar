@@ -1,5 +1,6 @@
 {
     "financials_payment": {
+        "wallet_auto_payment_name_system": "سیستم (پرداخت خودکار)",
         "error_no_panel_id": "خطا: پنل برای ساخت کاربر در این فاکتور مشخص نشده است.",
         "error_incomplete_plan_details": "خطا: جزئیات پلن در فاکتور ناقص است.",
         "error_creating_user_in_marzban": "خطا در ساخت کاربر در پنل مرزبان.",
