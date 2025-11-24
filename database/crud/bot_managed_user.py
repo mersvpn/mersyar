@@ -19,9 +19,13 @@ async def get_all_managed_users() -> List[str]:
         return list(result.scalars().all())
 
 
-async def add_to_managed_list(marzban_username: str) -> bool:
-    """Adds a username to the bot-managed list, ignoring if it already exists."""
-    stmt = mysql_insert(BotManagedUser).values(marzban_username=marzban_username).prefix_with("IGNORE")
+async def add_to_managed_list(marzban_username: str, created_by_admin_id: int = None) -> bool:
+    """Adds a username to the bot-managed list with creator ID."""
+    # مقدار دهی ستون جدید در اینجا انجام می‌شود 👇
+    stmt = mysql_insert(BotManagedUser).values(
+        marzban_username=marzban_username,
+        created_by_admin_id=created_by_admin_id
+    ).prefix_with("IGNORE")
     
     async with get_session() as session:
         try:
@@ -46,5 +50,12 @@ async def remove_from_managed_list(marzban_username: str) -> bool:
             await session.rollback()
             LOGGER.error(f"Failed to remove '{marzban_username}' from managed list: {e}", exc_info=True)
             return False
+        
+async def get_users_created_by(admin_id: int) -> List[str]:
+    """Returns a list of usernames created by a specific admin."""
+    async with get_session() as session:
+        stmt = select(BotManagedUser.marzban_username).where(BotManagedUser.created_by_admin_id == admin_id)
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
 
 # --- END OF FILE database/crud/bot_managed_user.py ---

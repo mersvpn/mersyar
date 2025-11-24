@@ -2,6 +2,7 @@
 import html
 import datetime
 import logging
+import asyncio 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
@@ -92,6 +93,8 @@ async def _get_api_for_user(marzban_username: str, context: ContextTypes.DEFAULT
     return None
 
 async def _start_modification_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE, prompt_text: str, prefix: str) -> None:
+    from shared.keyboards import get_back_to_main_menu_keyboard 
+    
     query = update.callback_query
     username = query.data.removeprefix(prefix)
     
@@ -102,10 +105,14 @@ async def _start_modification_conversation(update: Update, context: ContextTypes
         'page_number': context.user_data.get('current_page', 1)
     }
     await query.answer()
+    
     await query.message.delete()
+
     await context.bot.send_message(
-        chat_id=query.message.chat_id, text=prompt_text,
-        reply_markup=get_back_to_main_menu_keyboard(), parse_mode=ParseMode.MARKDOWN
+        chat_id=query.message.chat_id, 
+        text=prompt_text,
+        reply_markup=get_back_to_main_menu_keyboard(), 
+        parse_mode=ParseMode.MARKDOWN
     )
 
 async def prompt_for_add_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -343,6 +350,7 @@ async def renew_user_smart(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     renewal_duration_days = note_data.subscription_duration if note_data and note_data.subscription_duration else DEFAULT_RENEW_DAYS
     data_limit_gb = note_data.subscription_data_limit_gb if note_data and note_data.subscription_data_limit_gb is not None else (user_data.get('data_limit') or 0) / GB_IN_BYTES
     
+    # --- قدم ۱: ریست ترافیک (بدون تغییر) ---
     success_reset, message_reset = await api.reset_user_traffic(username)
     if not success_reset:
         await query.edit_message_text(_("marzban_modify_user.renew_error_reset_traffic", error=f"`{message_reset}`"), parse_mode=ParseMode.MARKDOWN)
@@ -355,8 +363,18 @@ async def renew_user_smart(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "data_limit": int(data_limit_gb * GB_IN_BYTES), 
         "status": "active"
     }
+
+    success_modify = False
+    message_modify = ""
     
-    success_modify, message_modify = await api.modify_user(username, payload_to_modify)
+    for attempt in range(3): 
+        success_modify, message_modify = await api.modify_user(username, payload_to_modify)
+        if success_modify:
+            break 
+        
+        LOGGER.warning(f"Renew attempt {attempt+1}/3 failed for {username}. Retrying in 1.5s...")
+        await asyncio.sleep(1.5) 
+    
     if not success_modify:
         await query.edit_message_text(_("marzban_modify_user.renew_error_modify", error=f"`{message_modify}`"), parse_mode=ParseMode.MARKDOWN)
         return

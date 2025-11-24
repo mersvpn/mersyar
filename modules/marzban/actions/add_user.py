@@ -33,6 +33,11 @@ from database.crud import user_note as crud_user_note
 from database.crud import marzban_link as crud_marzban_link
 from shared.keyboards import get_user_management_keyboard, get_customer_main_menu_keyboard
 
+# --- ✨ NEW IMPORT FOR SMART RETURN ---
+from shared.keyboards import get_back_to_main_menu_keyboard # برای منوی پشتیبان
+from config import config
+# -----------------------------------
+
 from .data_manager import normalize_username
 from shared.translator import _
 
@@ -108,8 +113,6 @@ async def add_user_to_panel_from_template(
             return None
     return None
 
-# --- ADD THIS FUNCTION BACK to add_user.py ---
-
 async def _build_panel_selection_keyboard() -> Optional[InlineKeyboardMarkup]:
     from shared.translator import translator
     panels = await crud_panel.get_all_panels()
@@ -119,24 +122,36 @@ async def _build_panel_selection_keyboard() -> Optional[InlineKeyboardMarkup]:
     return InlineKeyboardMarkup(keyboard)
 
 async def add_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Starts the process of adding a new user within the already selected panel.
-    """
     from shared.translator import translator
     
-    # --- ✨ NEW LOGIC: Get panel_id directly from context ---
     panel_id = context.user_data.get('selected_panel_id')
-    if not panel_id:
-        await update.message.reply_text(
-            translator.get("marzban_display.no_panel_selected_error"),
-            reply_markup=get_user_management_keyboard()
-        )
-        return ConversationHandler.END
     
-    # Store the panel_id for the next steps of this conversation
+    if not panel_id:
+        panels = await crud_panel.get_all_panels()
+        
+        if not panels:
+            await update.message.reply_text(
+                translator.get("panel_manager.add.no_panels_configured"),
+                reply_markup=ReplyKeyboardRemove() 
+            )
+            return ConversationHandler.END
+        
+        if len(panels) == 1:
+            panel_id = panels[0].id
+            context.user_data['selected_panel_id'] = panel_id
+            
+        else:
+            keyboard = await _build_panel_selection_keyboard()
+            await update.message.reply_text(
+                "🌐 لطفاً پنل (سرور) مورد نظر برای ساخت کاربر را انتخاب کنید:",
+                reply_markup=keyboard
+            )
+            # هدایت به مرحله انتخاب پنل
+            return SELECT_PANEL
+    # -----------------------------------------------------------------------
+
     context.user_data['panel_id'] = panel_id
     context.user_data['new_user'] = {}
-    # --- END OF NEW LOGIC ---
 
     template_config = await crud_template.load_template_config(panel_id)
     if not template_config or not template_config.template_username:
@@ -146,19 +161,13 @@ async def add_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return ConversationHandler.END
         
-    # Directly ask for the username, skipping panel selection
     prompt_text = translator.get("marzban.marzban_add_user.step1_ask_username")
     await update.message.reply_text(prompt_text, reply_markup=ReplyKeyboardRemove())
     
     return GET_USERNAME
 
 
-# --- REPLACE THIS ENTIRE FUNCTION in add_user.py ---
-
 async def add_user_for_customer_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Starts the process of adding a user for a customer by first asking the admin to select a panel.
-    """
     from shared.translator import translator
     query = update.callback_query
     await query.answer()
@@ -176,10 +185,7 @@ async def add_user_for_customer_start(update: Update, context: ContextTypes.DEFA
     )
     return SELECT_PANEL
 
-# --- ADD THIS NEW FUNCTION to add_user.py ---
-
 async def select_panel_for_creation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Gets the selected panel from the admin's choice and asks for the username."""
     from shared.translator import translator
     query = update.callback_query
     await query.answer()
@@ -201,13 +207,10 @@ async def select_panel_for_creation(update: Update, context: ContextTypes.DEFAUL
 
 async def add_user_get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     username = normalize_username(update.message.text)
-    
-    # Ensure panel_id is an integer
     panel_id = int(context.user_data.get('panel_id', 0))
     
     api = await _get_api_for_panel(panel_id)
     if not api:
-        # اگر اینجا خطا داد، یعنی مشکل جدی در شناسایی پنل وجود دارد
         await update.message.reply_text(_("panel_manager.add.panel_not_found"))
         return ConversationHandler.END
 
@@ -258,7 +261,7 @@ async def add_user_get_expire(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(_("marzban.marzban_add_user.invalid_number"))
         return GET_EXPIRE
 
-# --- REPLACE THE ENTIRE add_user_create FUNCTION in add_user.py ---
+# --- ✨ SMART FIX: INTELLIGENT CREATE FUNCTION ---
 
 async def add_user_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     from shared.translator import translator
@@ -286,11 +289,14 @@ async def add_user_create(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     if new_user_data:
         marzban_username = new_user_data['username']
-        await crud_bot_managed_user.add_to_managed_list(marzban_username)
+        await crud_bot_managed_user.add_to_managed_list(
+            marzban_username=marzban_username,
+            created_by_admin_id=admin_user.id
+        )
 
-        customer_id = context.user_data.get('customer_user_id') # Step 1: Remove the default 0
+        customer_id = context.user_data.get('customer_user_id') 
 
-        if customer_id: # Step 2: Add a condition to check if customer_id exists
+        if customer_id:
             await crud_marzban_link.create_or_update_link(marzban_username, customer_id, panel_id)
         
         await crud_user_note.create_or_update_user_note(
@@ -301,7 +307,8 @@ async def add_user_create(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         log_message = translator.get("marzban.marzban_add_user.log_new_user_created", username=marzban_username, datalimit=user_info['data_limit_gb'], duration=user_info['expire_days'], admin_mention=admin_user.full_name)
         await send_log(context.bot, log_message)
 
-        if customer_id != 0:
+        # ✨ SMART FIX 1: ONLY send message to customer if customer_id exists AND is valid
+        if customer_id and customer_id != 0:
             customer_message = await marzban_helpers.format_user_info_for_customer(api, marzban_username)
             subscription_url = new_user_data.get('subscription_url', '')
 
@@ -309,20 +316,36 @@ async def add_user_create(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             bio = io.BytesIO(); bio.name = 'qrcode.png'; qr_image.save(bio, 'PNG'); bio.seek(0)
             try:
                 await context.bot.send_photo(chat_id=customer_id, photo=bio, caption=customer_message, parse_mode=ParseMode.MARKDOWN)
-                callback_obj = StartManualInvoice(customer_id=customer_id, username=marzban_username)
-                admin_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(translator.get("marzban.marzban_add_user.button_send_invoice"), callback_data=callback_obj.to_string())]])
-                await context.bot.send_message(chat_id=admin_user.id, text=translator.get("marzban.marzban_add_user.config_sent_to_customer", customer_id=customer_id), reply_markup=admin_keyboard)
+                
+                # Only show invoice option to Super Admin
+                if admin_user.id in config.AUTHORIZED_USER_IDS:
+                    callback_obj = StartManualInvoice(customer_id=customer_id, username=marzban_username)
+                    admin_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(translator.get("marzban.marzban_add_user.button_send_invoice"), callback_data=callback_obj.to_string())]])
+                    await context.bot.send_message(chat_id=admin_user.id, text=translator.get("marzban.marzban_add_user.config_sent_to_customer", customer_id=customer_id), reply_markup=admin_keyboard)
+                else:
+                    # For Support admin, just confirm sending
+                    await context.bot.send_message(chat_id=admin_user.id, text="✅ کانفیگ برای مشتری ارسال شد.")
+
             except Exception as e:
                 LOGGER.warning(f"Failed to send message to customer {customer_id}: {e}")
-                await context.bot.send_message(chat_id=admin_user.id, text=translator.get("marzban.marzban_add_user.error_sending_to_customer", url=subscription_url))
+                # Don't spam error to support admin if it's just a blocked user
+                if admin_user.id in config.AUTHORIZED_USER_IDS:
+                    await context.bot.send_message(chat_id=admin_user.id, text=translator.get("marzban.marzban_add_user.error_sending_to_customer", url=subscription_url))
         
-        # ✨ GUARANTEED FIX: The keyboard is now defined inside the success block and is always available.
+        # --- END OF FIX 1 ---
+
+        if admin_user.id in config.AUTHORIZED_USER_IDS:
+            list_type = 'all'      
+        else:
+            list_type = 'myusers'
+
         final_keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton(
                 translator.get("keyboards.buttons.view_user_details"),
-                callback_data=f"user_details_{marzban_username}_all_1_{panel_id}" # Also pass panel_id
+                callback_data=f"user_details_{marzban_username}_{list_type}_1_{panel_id}" 
             )
         ]])
+        # ------------------------------
         
         await query.edit_message_text(
             translator.get("marzban.marzban_add_user.user_created_successfully", username=f"`{marzban_username}`"),
@@ -330,34 +353,51 @@ async def add_user_create(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode=ParseMode.MARKDOWN
         )
     else:
-        # This is the failure path, no keyboard is needed here.
         await query.edit_message_text(translator.get("marzban.marzban_add_user.error_creating_user"))
     
     context.user_data.clear()
-    # Return to the correct menu after the operation
-    await update.effective_message.reply_text(
-        translator.get("marzban.shared.menu_returned"), 
-        reply_markup=get_user_management_keyboard()
-    )
+    
+    # ✨ SMART FIX 2: Return to correct menu based on user role
+    is_super_admin = admin_user.id in config.AUTHORIZED_USER_IDS
+    
+    if is_super_admin:
+        # Super Admin -> User Management Menu
+        await update.effective_message.reply_text(
+            translator.get("marzban.shared.menu_returned"), 
+            reply_markup=get_user_management_keyboard()
+        )
+    else:
+        # Support Admin -> Back to Support Panel (Simulated by sending main menu logic)
+        # Since support panel is part of main menu structure for them
+        from modules.support_panel.actions import show_support_menu
+        await show_support_menu(update, context)
+        
+    # --- END OF FIX 2 ---
+
     return ConversationHandler.END
 
 async def cancel_add_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     query = update.callback_query
+    user = update.effective_user
     
     if query:
-        # If the conversation was started with an inline button, edit the message.
         await query.answer()
         try:
             await query.edit_message_text(_("general.operation_cancelled"))
         except Exception as e:
             logging.warning(f"Could not edit message on cancel: {e}")
     
-    # In all cases, send a new message with the ReplyKeyboard to ensure it's displayed.
-    await update.effective_chat.send_message(
-        _("shared.menu_returned"), 
-        reply_markup=get_user_management_keyboard()
-    )
+    # ✨ SMART FIX 3: Return to correct menu on cancel too
+    is_super_admin = user.id in config.AUTHORIZED_USER_IDS
     
+    if is_super_admin:
+        await update.effective_chat.send_message(
+            _("shared.menu_returned"), 
+            reply_markup=get_user_management_keyboard()
+        )
+    else:
+        from modules.support_panel.actions import show_support_menu
+        await show_support_menu(update, context)
+        
     return ConversationHandler.END
-

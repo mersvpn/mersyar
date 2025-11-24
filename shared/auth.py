@@ -8,12 +8,26 @@ from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filt
 from telegram import error, InlineKeyboardButton, InlineKeyboardMarkup
 from config import config
 from shared.translator import _
+from database.crud.admin import is_support_admin
 
 LOGGER = logging.getLogger(__name__)
 
 async def is_admin(user_id: int) -> bool:
-    """A simple, reusable check if a user is an admin."""
-    return user_id in config.AUTHORIZED_USER_IDS
+    """
+    Checks if a user is either a Super Admin (from .env) OR a Support Admin (from DB).
+    """
+    # 1. Check Super Admin (File .env)
+    if user_id in config.AUTHORIZED_USER_IDS:
+        return True
+    
+    # 2. Check Support Admin (Database)
+    try:
+        if await is_support_admin(user_id):
+            return True
+    except Exception as e:
+        LOGGER.error(f"Database error checking admin status for {user_id}: {e}")
+        
+    return False
 
 def admin_only(func):
     @wraps(func)
@@ -157,5 +171,4 @@ def ensure_channel_membership(func):
 
     return wrapped
 
-async def is_user_admin(user_id: int) -> bool:
-    return user_id in config.AUTHORIZED_USER_IDS
+is_user_admin = is_admin

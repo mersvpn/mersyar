@@ -82,11 +82,21 @@ async def get_data_limit_and_ask_for_price(update: Update, context: ContextTypes
     return GET_PRICE
 
 async def get_price_and_save_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    from modules.general.actions import end_conversation_and_show_menu
     from shared.translator import _
+    from config import config 
     
     username = context.user_data.get('note_username')
-    if not username: return await end_conversation_and_show_menu(update, context)
+    if not username: 
+        if update.effective_user.id in config.AUTHORIZED_USER_IDS:
+             from shared.keyboards import get_user_management_keyboard
+             reply_markup = get_user_management_keyboard()
+        else:
+             from modules.support_panel.actions import show_support_menu
+             await show_support_menu(update, context)
+             return ConversationHandler.END
+
+        await update.message.reply_text(_("marzban_modify_user.conversation_expired"), reply_markup=reply_markup)
+        return ConversationHandler.END
     
     try:
         price = int(update.message.text)
@@ -102,10 +112,26 @@ async def get_price_and_save_note(update: Update, context: ContextTypes.DEFAULT_
         duration=note_details.get('duration'),
         data_limit_gb=note_details.get('data_limit_gb')
     )
+
+    user_id = update.effective_user.id
+    
+    if user_id in config.AUTHORIZED_USER_IDS:
+        reply_markup = get_user_management_keyboard()
+        menu_message = "" 
+    else:
+
+        reply_markup = None 
+
     await update.message.reply_text(
         _("marzban.marzban_note.note_saved_successfully", username=f"`{username}`"), 
-        parse_mode=ParseMode.MARKDOWN, reply_markup=get_user_management_keyboard()
+        parse_mode=ParseMode.MARKDOWN, 
+        reply_markup=reply_markup
     )
+    
+    if user_id not in config.AUTHORIZED_USER_IDS:
+        from modules.support_panel.actions import show_support_menu
+        await show_support_menu(update, context)
+
     context.user_data.clear()
     return ConversationHandler.END
 

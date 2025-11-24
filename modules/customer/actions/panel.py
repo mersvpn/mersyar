@@ -11,7 +11,7 @@ async def show_customer_panel(update: Update, context: ContextTypes.DEFAULT_TYPE
     Displays the main customer shop menu using a ReplyKeyboardMarkup.
     (MODIFIED to handle both Message and CallbackQuery)
     """
-    reply_markup = get_customer_shop_keyboard()
+    reply_markup = await get_customer_shop_keyboard()
     text = _("customer.customer_panel.shop_welcome")
     
     chat_id = update.effective_chat.id

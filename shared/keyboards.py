@@ -87,15 +87,18 @@ def get_helper_tools_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
 
         [KeyboardButton(_("keyboards.helper_tools.daily_automation"))],
+        [KeyboardButton(_("keyboards.helper_tools.manage_admins"))],
         [KeyboardButton(_("keyboards.helper_tools.set_forced_join_channel"))],
         [KeyboardButton(_("keyboards.helper_tools.create_connect_link")), KeyboardButton(_("keyboards.helper_tools.test_account_settings"))],
         [KeyboardButton(_("keyboards.helper_tools.back_to_settings"))]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# FILE: shared/keyboards.py
 
 async def get_customer_main_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+
+    from database.crud.admin import is_support_admin
+    from config import config
 
     keyboard_layout = [
         [KeyboardButton(_("keyboards.customer_main_menu.shop"))],
@@ -111,25 +114,44 @@ async def get_customer_main_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
 
     if config.SUPPORT_USERNAME:
         keyboard_layout.append([KeyboardButton(_("keyboards.customer_main_menu.support"))])
+
+    is_super_admin = user_id in config.AUTHORIZED_USER_IDS
+    is_support = False
+    try:
+        is_support = await is_support_admin(user_id)
+    except Exception:
+        pass 
+
+    if is_super_admin or is_support:
+        keyboard_layout.append([KeyboardButton(_("keyboards.customer_main_menu.support_panel"))])
+    # ------------------------------------------
     
     return ReplyKeyboardMarkup(keyboard_layout, resize_keyboard=True)
 
-def get_customer_shop_keyboard() -> ReplyKeyboardMarkup:
-    keyboard = [
-        # --- FIX: All keys now use the 'keyboards.' namespace ---
-        [KeyboardButton(_("keyboards.customer_shop.assisted_purchase"))],
-        [KeyboardButton(_("keyboards.customer_shop.custom_volume_plan")), KeyboardButton(_("keyboards.customer_shop.unlimited_volume_plan"))],
-        [KeyboardButton(_("keyboards.customer_shop.send_receipt"))],
-        [KeyboardButton(_("keyboards.customer_shop.back_to_main_menu"))]
-    ]
+
+async def get_customer_shop_keyboard() -> ReplyKeyboardMarkup:
+    bot_settings = await crud_bot_setting.load_bot_settings()
+    is_sub_creation_active = bot_settings.get('is_sub_creation_active', True)
+
+    keyboard = []
+    if is_sub_creation_active:
+        keyboard.append([KeyboardButton(_("keyboards.customer_shop.assisted_purchase"))])
+
+    keyboard.append([KeyboardButton(_("keyboards.customer_shop.custom_volume_plan")), KeyboardButton(_("keyboards.customer_shop.unlimited_volume_plan"))])
+    keyboard.append([KeyboardButton(_("keyboards.customer_shop.send_receipt"))])
+    keyboard.append([KeyboardButton(_("keyboards.customer_shop.back_to_main_menu"))])
+
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_back_to_main_menu_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
-        # --- FIX: All keys now use the 'keyboards.' namespace ---
         [KeyboardButton(_("keyboards.general.back_to_main_menu"))]
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard, 
+        resize_keyboard=True, 
+        is_persistent=True  
+    )
 
 async def get_customer_view_for_admin_keyboard() -> ReplyKeyboardMarkup:
     bot_settings = await crud_bot_setting.load_bot_settings()

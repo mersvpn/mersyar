@@ -1,11 +1,12 @@
-# FILE: bot.py (FINAL CORRECTED VERSION)
-# --- START OF NEW FILE CONTENT ---
+# FILE: bot.py (WINDOWS FIXED VERSION)
 
 import logging
 import logging.handlers
 import sys
 import os
 import argparse
+import asyncio # <--- اضافه شد
+import platform # <--- اضافه شد
 
 from telegram import Update
 from telegram.ext import (
@@ -17,6 +18,13 @@ from config import config
 from shared.translator import init_translator
 from core.panel_api.marzban import close_marzban_client
 from database import engine as db_engine
+
+# ==========================================
+# 🔧 WINDOWS FIX (مهم برای اجرای روی ویندوز)
+# ==========================================
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# ==========================================
 
 init_translator()
 
@@ -41,8 +49,6 @@ def setup_logging():
     LOGGER.info("Logging configured successfully.")
 
 async def debug_update_logger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # This function is for debugging purposes, you can keep it or remove it.
-    # It logs the details of every update received by the bot.
     try:
         if update and hasattr(update, 'to_json'):
             LOGGER.debug(f"Update received: {update.to_json()}")
@@ -69,13 +75,20 @@ async def heartbeat(context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(application: Application):
     """
-    This function is called after the application is built.
-    It's the single, correct place to register all handlers in the correct order.
+    تابع راه‌اندازی اولیه
     """
-    await db_engine.init_db()
-    LOGGER.info("Registering all application handlers with corrected priority...")
+    # 1. تلاش برای اتصال به دیتابیس
+    try:
+        await db_engine.init_db()
+        LOGGER.info("Database connection initialized successfully.")
+    except Exception as e:
+        LOGGER.critical(f"🔥 FATAL ERROR: Could not connect to database! Reason: {e}")
+        # اگر دیتابیس وصل نشود، ادامه دادن فایده‌ای ندارد
+        sys.exit(1)
 
-    # --- Import Handlers ---
+    LOGGER.info("Registering all application handlers...")
+
+    # 2. ایمپورت کردن ماژول‌ها (درون تابع)
     from modules.general import handler as general_handler
     from modules.marzban import handler as marzban_handler
     from modules.customer import handler as customer_handler
@@ -88,21 +101,20 @@ async def post_init(application: Application):
     from modules.panel_manager import handler as panel_manager_handler
     from modules.stats import handler as stats_handler
     from modules.search import handler as search_handler
+    
+    # ماژول‌های تغییر یافته
+    from modules import support_panel
+    from modules.admin_manager import handler as admin_manager_handler
 
-    # --- Handler Registration Order (CORRECTED) ---
-    # Handlers are processed by group, then by the order they are added.
-    # We want conversations (group 0) to be checked BEFORE general text handlers (group 1).
-
-    # Group -1: These run first for every single update.
+    # 3. ثبت هندلرها
     general_handler.register_gatekeeper(application)
     application.add_handler(TypeHandler(Update, update_user_activity), group=-1)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, debug_update_logger), group=-1)
     application.add_handler(CallbackQueryHandler(debug_update_logger), group=-1)
 
-    # Group 0 (default): ALL ConversationHandlers. This is crucial.
-    # PTB will check these first to see if an update belongs to an active conversation.
     panel_manager_handler.register(application)
     search_handler.register(application)
+    admin_manager_handler.register(application)
     marzban_handler.register(application)
     bot_settings_handler.register(application)
     customer_handler.register(application)
@@ -110,14 +122,12 @@ async def post_init(application: Application):
     broadcaster_handler.register(application)
     guides_handler.register(application)
 
-    # Group 1: General command and message handlers.
-    # These will only be checked if the update doesn't belong to any active conversation.
     general_handler.register_commands(application)
     payment_handler.register(application)
     reminder_handler.register(application)
     stats_handler.register(application)
+    support_panel.handler.register(application)
 
-    # A global cancel command that works outside conversations
     from shared.callbacks import main_menu_fallback
     application.add_handler(CommandHandler("cancel", main_menu_fallback), group=1)
 
@@ -146,8 +156,8 @@ def main() -> None:
         .build()
     )
 
-    # --- Job Queue Setup ---
     from modules.reminder.actions.jobs import cleanup_expired_test_accounts
+    
     if application.job_queue:
         application.job_queue.run_repeating(heartbeat, interval=3600, first=10, name="heartbeat")
         application.job_queue.run_repeating(cleanup_expired_test_accounts, interval=3600, first=60, name="cleanup_test_accounts")
@@ -182,5 +192,3 @@ if __name__ == '__main__':
         main()
     except Exception as e:
         logging.critical("A critical error occurred in the main execution block.", exc_info=True)
-
-# --- END OF NEW FILE CONTENT ---

@@ -69,16 +69,28 @@ async def _build_and_send_main_settings_menu(update: Update, context: ContextTyp
     log_channel_btn_text = _("bot_settings.status_active") if log_channel_is_enabled else _("bot_settings.status_inactive")
     log_channel_callback = "toggle_log_channel_disable" if log_channel_is_enabled else "toggle_log_channel_enable"
 
-
     is_forced_join_enabled = bot_settings.get('is_forced_join_active', False)
     forced_join_btn_text = _("bot_settings.status_active") if is_forced_join_enabled else _("bot_settings.status_inactive")
     forced_join_callback = "toggle_forced_join_disable" if is_forced_join_enabled else "toggle_forced_join_enable"
+    
     auto_confirm_is_enabled = bot_settings.get('auto_confirm_invoices', False)
     auto_confirm_btn_text = _("bot_settings.status_active") if auto_confirm_is_enabled else _("bot_settings.status_inactive")
     auto_confirm_callback = "toggle_auto_confirm_disable" if auto_confirm_is_enabled else "toggle_auto_confirm_enable"
+
+    # --- بخش جدید: دکمه ساخت اشتراک ---
+    is_sub_creation_active = bot_settings.get('is_sub_creation_active', True)
+    sub_creation_btn_text = _("bot_settings.status_active") if is_sub_creation_active else _("bot_settings.status_inactive")
+    sub_creation_callback = "toggle_sub_creation_disable" if is_sub_creation_active else "toggle_sub_creation_enable"
+    # ----------------------------------
+
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     keyboard = [
         [InlineKeyboardButton(maintenance_btn_text, callback_data=maintenance_callback), InlineKeyboardButton(_("bot_settings.label_bot_status"), callback_data="noop")],
+        
+        # --- افزودن دکمه به کیبورد ---
+        [InlineKeyboardButton(sub_creation_btn_text, callback_data=sub_creation_callback), InlineKeyboardButton(_("bot_settings.label_sub_creation"), callback_data="noop")],
+        # -----------------------------
+
         [InlineKeyboardButton(log_channel_btn_text, callback_data=log_channel_callback), InlineKeyboardButton(_("bot_settings.label_log_channel"), callback_data="noop")],
         [InlineKeyboardButton(forced_join_btn_text, callback_data=forced_join_callback), InlineKeyboardButton(_("bot_settings.label_forced_join"), callback_data="noop")],
         [InlineKeyboardButton(auto_confirm_btn_text, callback_data=auto_confirm_callback), InlineKeyboardButton(_("bot_settings.label_auto_confirm"), callback_data="noop")],
@@ -406,3 +418,17 @@ async def show_settings_and_tools_menu(update: Update, context: ContextTypes.DEF
         translator.get("bot_settings.welcome_to_settings_and_tools"),
         reply_markup=get_settings_and_tools_keyboard()
     )
+
+async def toggle_sub_creation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query  # <--- FIX: Corrected this line
+    new_status = (query.data == "toggle_sub_creation_enable")
+
+    try:
+        await crud_bot_setting.save_bot_settings({"is_sub_creation_active": new_status})
+        feedback = _("bot_settings.feedback_sub_creation_enabled") if new_status else _("bot_settings.feedback_sub_creation_disabled")
+        await query.answer(feedback, show_alert=True)
+        await _build_and_send_main_settings_menu(update, context)
+    except Exception as e:
+        LOGGER.error(f"Error toggling sub creation: {e}")
+        await query.answer(_("errors.database_error"), show_alert=True)
+    return MENU_STATE

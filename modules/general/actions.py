@@ -7,7 +7,7 @@ from decimal import Decimal
 from telegram import Update, User
 from telegram.ext import ContextTypes, ConversationHandler, ApplicationHandlerStop
 from telegram.constants import ParseMode
-
+from database.crud.admin import is_support_admin
 from database.crud import user as crud_user
 from database.crud import bot_setting as crud_bot_setting
 from database.crud import marzban_link as crud_marzban_link
@@ -52,29 +52,32 @@ async def get_user_data(username: str):
     return None
 # --- END OF TEMPORARY FIX ---
 
-
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Sends the appropriate main menu and ends any conversation that leads to it.
     """
     user = update.effective_user
     
-    # This logic determines the message text based on whether it's a fresh start or a return.
     if context.user_data.pop('is_rerouted_from_conv', False):
         message_text = _("general.returned_to_main_menu")
     else:
         message_text = _("general.welcome", first_name=html.escape(user.first_name))
 
-    # Determine the correct keyboard and append the dashboard message
-    if user.id in config.AUTHORIZED_USER_IDS and not context.user_data.get('is_admin_in_customer_view'):
+    # --- LOGIC CHANGE: Distinguish between Super Admin and Support Admin ---
+    is_super_admin = user.id in config.AUTHORIZED_USER_IDS
+    
+    if is_super_admin and not context.user_data.get('is_admin_in_customer_view'):
         reply_markup = get_admin_main_menu_keyboard()
         if not context.user_data.get('is_rerouted_from_conv'): 
             message_text += "\n" + _("general.admin_dashboard_active")
     else:
+        # For Support Admins AND Regular Customers
         if context.user_data.get('is_admin_in_customer_view'):
             reply_markup = await get_customer_view_for_admin_keyboard()
         else:
-            reply_markup = await get_customer_main_menu_keyboard(update.effective_user.id)
+            # This function is now smart enough to show the "Support Panel" button if needed
+            reply_markup = await get_customer_main_menu_keyboard(user.id)
+            
         if not context.user_data.get('is_rerouted_from_conv'): 
             message_text += "\n" + _("general.customer_dashboard_prompt")
 
@@ -93,17 +96,13 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @ensure_channel_membership
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    The main entry point. It intelligently displays the correct welcome message
-    based on whether the user is starting fresh or returning from a conversation.
-    """
     user = update.effective_user
     is_return_from_conv = context.user_data.pop('is_rerouted_from_conv', False)
 
+    # 1. بررسی تعمیرات و ذخیره کاربر (فقط اگر بازگشت از مکالمه نباشد)
     if not is_return_from_conv:
         LOGGER.critical(f"!!!!!! [CRITICAL LOG] Fresh 'start' CALLED for user {user.id}. !!!!!!")
         if not await is_bot_active() and not await is_admin(user.id):
-            # Maintenance Mode Message
             await update.message.reply_markdown(
                 "**🛠 ربات در حال تعمیر و به‌روزرسانی است**\n\n"
                 "در حال حاضر امکان پاسخگویی وجود ندارد. لطفاً کمی بعد دوباره تلاش کنید.\n\n"
@@ -124,21 +123,69 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception as e:
             LOGGER.error(_("errors.db_user_save_failed", user_id=user.id, error=e))
 
-    # Reuse send_main_menu logic manually here to avoid recursion issues or complex logic duplication
+        # 2. مدیریت دیپ لینک‌ها (Deep Links)
+        # بررسی می‌کنیم آیا آرگومانی همراه استارت آمده است؟ (مثل details_123 یا link-abc)
+        if context.args and len(context.args) > 0:
+            arg = context.args[0]
+            
+            # الف) لینک اتصال کاربر (link-username)
+            if arg.startswith("link-"):
+                marzban_username_raw = arg.split('-', 1)[1]
+                marzban_username_normalized = normalize_username(marzban_username_raw)
+                LOGGER.info(f"Deep link detected for user {user.id}: {marzban_username_raw}")
+                
+                user_panel_data = await get_user_data(marzban_username_normalized)
+                
+                if not user_panel_data:
+                    await update.message.reply_text(_("marzban.linking.user_not_found"))
+                else:
+                    panel_id_to_link = user_panel_data.get('panel_id')
+                    # فال‌بک برای پیدا کردن پنل اگر مستقیم پیدا نشد
+                    if not panel_id_to_link:
+                        all_panels = await crud_panel.get_all_panels()
+                        if all_panels: panel_id_to_link = all_panels[0].id
+                    
+                    if panel_id_to_link:
+                        success = await crud_marzban_link.create_or_update_link(marzban_username_normalized, user.id, panel_id_to_link)
+                        if success:
+                            safe_username = html.escape(marzban_username_raw)
+                            await update.message.reply_text(_("marzban.linking.link_successful", username=safe_username), parse_mode=ParseMode.HTML)
+                            await notify_admins_on_link(context, user, marzban_username_raw)
+                        else:
+                            await update.message.reply_text(_("marzban.linking.link_error"))
+                
+                # مهم: آرگومان را پاک می‌کنیم تا در دفعات بعد باعث لوپ نشود
+                context.args.clear()
+
+            # ب) مشاهده جزئیات سرویس (details_username) - معمولا برای ادمین
+            elif arg.startswith("details_"):
+                # ایمپورت داخلی برای جلوگیری از چرخه (Circular Import)
+                from modules.marzban.actions import display
+                # اگر نیاز است فقط ادمین ببیند، شرط is_admin بگذارید. در اینجا پیش‌فرض باز می‌گذاریم.
+                if await is_admin(user.id):
+                    await display.handle_deep_link_details(update, context)
+                    return # چون تابع display خودش خروجی می‌دهد، اینجا خارج می‌شویم
+
+    # 3. نمایش منوی اصلی (استاندارد)
     if is_return_from_conv:
         message_text = _("general.returned_to_main_menu")
     else:
         message_text = _("general.welcome", first_name=html.escape(user.first_name))
 
-    if user.id in config.AUTHORIZED_USER_IDS and not context.user_data.get('is_admin_in_customer_view'):
+    # منطق تشخیص ادمین کل و ادمین پشتیبان
+    is_super_admin = user.id in config.AUTHORIZED_USER_IDS
+    
+    if is_super_admin and not context.user_data.get('is_admin_in_customer_view'):
         reply_markup = get_admin_main_menu_keyboard()
         if not is_return_from_conv:
             message_text += "\n" + _("general.admin_dashboard_active")
     else:
+        # برای ادمین پشتیبان و مشتری معمولی
         if context.user_data.get('is_admin_in_customer_view'):
             reply_markup = await get_customer_view_for_admin_keyboard()
         else:
             reply_markup = await get_customer_main_menu_keyboard(user.id)
+            
         if not is_return_from_conv:
              message_text += "\n" + _("general.customer_dashboard_prompt")
     

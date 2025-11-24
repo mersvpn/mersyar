@@ -60,7 +60,7 @@ async def start_custom_purchase(update: Update, context: ContextTypes.DEFAULT_TY
         if update.callback_query:
             await update.callback_query.answer(error_text, show_alert=True)
         else:
-            await target_message.reply_text(error_text, reply_markup=get_customer_shop_keyboard())
+            await target_message.reply_text(error_text, reply_markup=await get_customer_shop_keyboard())
         return ConversationHandler.END
         
     context.user_data.clear()
@@ -68,7 +68,7 @@ async def start_custom_purchase(update: Update, context: ContextTypes.DEFAULT_TY
     # ✨ NEW: Ask the user to select a panel first
     keyboard = await _build_panel_selection_keyboard()
     if not keyboard:
-        await target_message.reply_text(_("panel_manager.add.no_panels_configured"), reply_markup=get_customer_shop_keyboard())
+        await target_message.reply_text(_("panel_manager.add.no_panels_configured"), reply_markup=await get_customer_shop_keyboard())
         return ConversationHandler.END
 
     text = _("custom_purchase.step0_ask_panel")

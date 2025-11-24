@@ -34,7 +34,7 @@ async def start_receipt_from_menu(update: Update, context: ContextTypes.DEFAULT_
     await processing_message.delete()
 
     if not pending_invoices:
-        await update.message.reply_text(_("customer.receipt.no_pending_invoices"), reply_markup=get_customer_shop_keyboard())
+        await update.message.reply_text(_("customer.receipt.no_pending_invoices"), reply_markup=await get_customer_shop_keyboard())
         return ConversationHandler.END
 
     if len(pending_invoices) == 1:
@@ -125,10 +125,10 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     invoice_id = context.user_data.get('invoice_id')
 
     if not invoice_id:
-        await update.message.reply_text(_("customer.receipt.internal_error_start_over"), reply_markup=get_customer_shop_keyboard())
+        await update.message.reply_text(_("customer.receipt.internal_error_start_over"), reply_markup=await get_customer_shop_keyboard())
         return ConversationHandler.END
 
-    await update.message.reply_text(_("customer.receipt.sent_to_support_success"), reply_markup=get_customer_shop_keyboard())
+    await update.message.reply_text(_("customer.receipt.sent_to_support_success"), reply_markup=await get_customer_shop_keyboard())
     
     invoice = await crud_invoice.get_pending_invoice_by_id(invoice_id)
     if not invoice:
@@ -225,7 +225,7 @@ async def cancel_receipt_upload(update: Update, context: ContextTypes.DEFAULT_TY
         except BadRequest:
             pass
     
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=_("customer.receipt.back_to_shop_menu"), reply_markup=get_customer_shop_keyboard())
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=_("customer.receipt.back_to_shop_menu"), reply_markup=await get_customer_shop_keyboard())
     context.user_data.clear()
     return ConversationHandler.END
 

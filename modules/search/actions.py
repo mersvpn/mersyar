@@ -3,7 +3,8 @@ import logging
 import math
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
-
+from database.crud import bot_managed_user as crud_bot_managed_user
+from config import config
 # Database and utility imports
 from database.crud import user as crud_user
 from shared import panel_utils
@@ -80,8 +81,9 @@ async def _search_by_telegram_id(update: Update, context: ContextTypes.DEFAULT_T
     return MAIN_MENU
 
 async def _search_by_service_username(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> int:
-    """Handles searching for services. This part remains stateless and ends the conversation."""
+    """Handles searching for services with ownership filtering for support admins."""
     search_query_normalized = normalize_username(query)
+    user_id = update.effective_user.id
     
     await update.message.reply_text(
         _("search.searching_for", query=f"«{query}»"),
@@ -89,12 +91,29 @@ async def _search_by_service_username(update: Update, context: ContextTypes.DEFA
     )
 
     try:
+        # 1. دریافت همه کاربران از پنل
         all_users = await panel_utils.get_all_users_from_all_panels()
         if all_users is None:
             await update.message.reply_text(_("marzban_display.panel_connection_error"))
             return SEARCH_PROMPT
 
-        found_users = [user for user in all_users if user.get('username') and isinstance(user.get('username'), str) and search_query_normalized in normalize_username(user['username'])]
+        # 2. فیلتر اولیه بر اساس متن جستجو
+        found_users = [
+            user for user in all_users 
+            if user.get('username') and isinstance(user.get('username'), str) 
+            and search_query_normalized in normalize_username(user['username'])
+        ]
+
+        # --- ✨ بخش جدید: اعمال محدودیت دسترسی ---
+        # اگر کاربر "سوپر ادمین" نباشد، باید فیلتر شود
+        if user_id not in config.AUTHORIZED_USER_IDS:
+            # دریافت لیست یوزرهای ساخته شده توسط این ادمین
+            my_managed_usernames = await crud_bot_managed_user.get_users_created_by(user_id)
+            
+            # نگه داشتن فقط آنهایی که در لیست خودش هستند
+            found_users = [u for u in found_users if u['username'] in my_managed_usernames]
+        # ----------------------------------------
+
         found_users.sort(key=lambda u: u.get('username', '').lower())
 
         if not found_users:
@@ -109,7 +128,7 @@ async def _search_by_service_username(update: Update, context: ContextTypes.DEFA
             title = _("search.search_results_title_username", query=f"«{query}»")
             
             await update.message.reply_text(title, reply_markup=keyboard)
-            return ConversationHandler.END # End conversation after showing inline results
+            return ConversationHandler.END
 
     except Exception:
         LOGGER.error(f"An exception occurred during service username search!", exc_info=True)

@@ -60,8 +60,13 @@ async def save_bot_settings(settings_to_update: Dict[str, Any]) -> bool:
 
     values_to_insert = []
     for key, value in settings_to_update.items():
-        # Serialize complex types (dict, list) to a JSON string
-        value_to_save = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+
+        if isinstance(value, (dict, list, bool)):
+            value_to_save = json.dumps(value)
+        else:
+            value_to_save = str(value)
+        # -----------------------------------------------------
+        
         values_to_insert.append({"setting_key": key, "setting_value": value_to_save})
 
     if not values_to_insert:
@@ -77,22 +82,14 @@ async def save_bot_settings(settings_to_update: Dict[str, Any]) -> bool:
             await session.execute(update_stmt)
             await session.commit()
             
-            # --- Key Change Starts Here ---
-            # Instead of just invalidating, we proactively update the cache.
-            # This ensures that any part of the code accessing the settings
-            # immediately gets the fresh data without needing a re-read from the DB.
             if _bot_settings_cache is not None:
                 _bot_settings_cache.update(settings_to_update)
                 LOGGER.info(f"Bot settings cache updated with: {list(settings_to_update.keys())}")
             else:
-                # If cache was empty, just invalidate so the next load gets everything fresh.
                 _invalidate_cache()
-            # --- Key Change Ends Here ---
 
             return True
         except Exception as e:
             await session.rollback()
             LOGGER.error(f"Failed to save bot settings: {e}", exc_info=True)
             return False
-
-# --- END: Replace this function ---

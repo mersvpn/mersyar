@@ -435,8 +435,22 @@ async def show_user_details_panel(context: ContextTypes.DEFAULT_TYPE, chat_id: i
     message_text += f"{translator.get('marzban.marzban_display.user_usage_label')} {usage_str}\n"
     message_text += f"{translator.get('marzban.marzban_display.user_expiry_label')} `{expire_str}`"
     
-    back_button_callback = f"list_subs_page_{page_number}" if list_type == 'subs' else f"show_users_page_{list_type}_{page_number}"
-    back_button_text = translator.get("marzban.marzban_display.back_to_subs_list") if list_type == 'subs' else translator.get("marzban.marzban_display.back_to_users_list")
+    if list_type == 'myusers':
+        back_button_callback = f"myusers_page_{page_number}"
+        back_button_text = translator.get("marzban.marzban_display.back_to_users_list")
+        
+    elif list_type == 'search':
+        back_button_callback = "main_menu"
+        back_button_text = translator.get("keyboards.buttons.back_to_main_menu")
+        
+    elif list_type == 'subs':
+        back_button_callback = f"list_subs_page_{page_number}"
+        back_button_text = translator.get("marzban.marzban_display.back_to_subs_list")
+        
+    else:
+        back_button_callback = f"show_users_page_{list_type}_{page_number}"
+        back_button_text = translator.get("marzban.marzban_display.back_to_users_list")
+    # ----------------------------------------
     
     send_invoice_callback = StartManualInvoice(customer_id=0, username=username).to_string()
 

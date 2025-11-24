@@ -76,7 +76,7 @@ async def start_unlimited_purchase(update: Update, context: ContextTypes.DEFAULT
     
     keyboard = await _build_panel_selection_keyboard()
     if not keyboard:
-        await update.effective_message.reply_text(_("panel_manager.add.no_panels_configured"), reply_markup=get_customer_shop_keyboard())
+        await update.effective_message.reply_text(_("panel_manager.add.no_panels_configured"), reply_markup=await get_customer_shop_keyboard())
         return ConversationHandler.END
 
     text = _("unlimited_purchase.step0_ask_panel")
@@ -128,7 +128,7 @@ async def get_username_and_ask_plan(update: Update, context: ContextTypes.DEFAUL
     context.user_data['unlimited_plan']['username'] = username_to_check
     active_plans = await crud_unlimited_plan.get_active_unlimited_plans()
     if not active_plans:
-        await update.message.reply_text(_("unlimited_purchase.no_plans_available"), reply_markup=get_customer_shop_keyboard())
+        await update.message.reply_text(_("unlimited_purchase.no_plans_available"), reply_markup=await get_customer_shop_keyboard())
         return ConversationHandler.END
 
     keyboard_rows = [

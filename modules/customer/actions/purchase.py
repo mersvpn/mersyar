@@ -53,7 +53,7 @@ async def handle_request_message(update: Update, context: ContextTypes.DEFAULT_T
     # ✨ MODIFIED: Now sends the success message along with the 'customer shop' keyboard
     await update.message.reply_text(
         text=_("manual_purchase.request_sent_success"),
-        reply_markup=get_customer_shop_keyboard()
+        reply_markup=await get_customer_shop_keyboard()
     )
 
     if config.AUTHORIZED_USER_IDS:

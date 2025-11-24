@@ -16,7 +16,9 @@ from .actions import (
     show_helper_tools_menu, back_to_settings_menu,
     start_test_account_settings, toggle_test_account_activation,
     prompt_for_hours, prompt_for_gb, prompt_for_limit,
+    toggle_sub_creation,
     process_and_save_value, back_to_management_menu,
+    
     ADMIN_TEST_ACCOUNT_MENU, GET_HOURS, GET_GB, GET_LIMIT
 )
 from shared.translator import _
@@ -37,6 +39,7 @@ def register(application: Application) -> None:
                 CallbackQueryHandler(toggle_log_channel, pattern=r'^toggle_log_channel_'),
                 CallbackQueryHandler(toggle_forced_join_status, pattern=r'^toggle_forced_join_'),
                 CallbackQueryHandler(toggle_auto_confirm, pattern=r'^toggle_auto_confirm_'),
+                CallbackQueryHandler(toggle_sub_creation, pattern=r'^toggle_sub_creation_'),
             ]
         },
         fallbacks=[

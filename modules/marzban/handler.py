@@ -1,19 +1,38 @@
-# FILE: modules/marzban/handler.py (نسخه نهایی و یکپارچه شده)
+# FILE: modules/marzban/handler.py
 # --- START OF FILE ---
 
+from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import (
     Application, ConversationHandler, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters
+    MessageHandler, filters, ContextTypes
 )
-# ✨ FIX: Import only the necessary and correct callbacks
 from shared.callbacks import cancel_conversation_and_stop_propagation, cancel_to_helper_tools
+from shared.keyboards import get_admin_main_menu_keyboard 
 from shared.translator import translator
 from modules.general.actions import switch_to_customer_view
 from modules.payment.actions import renewal as payment_actions
 from config import config
+import re
 
-# Define Conversation States for clarity
+# Define Conversation States
 SELECT_PANEL, USER_MENU = range(2)
+
+# --- تابع جدید برای خروج هوشمند ---
+async def universal_exit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    این تابع وقتی اجرا می‌شود که کاربر وسط مکالمه دکمه‌ای از منوی اصلی را بزند.
+    مکالمه را می‌بندد و منوی اصلی را مجدداً ارسال می‌کند تا کاربر بداند آزاد شده است.
+    """
+    user_id = update.effective_user.id
+    
+    # ارسال پیام لغو و نمایش مجدد منوی اصلی
+    await update.message.reply_text(
+        text=translator.get("keyboards.general.cancel"),
+        reply_markup=get_admin_main_menu_keyboard()
+    )
+    
+    # پایان دادن به مکالمه فعلی
+    return ConversationHandler.END
 
 def register(application: Application) -> None:
     """Registers all handlers for the Marzban (admin) module."""
@@ -23,58 +42,84 @@ def register(application: Application) -> None:
     )
 
     admin_filter = filters.User(user_id=config.AUTHORIZED_USER_IDS)
-    
-    # --- Get translated texts for filters once ---
-    USER_MANAGEMENT_TEXT = translator.get("keyboards.admin_main_menu.manage_users")
-    SEARCH_USER_TEXT = translator.get("keyboards.admin_main_menu.search_user") # Moved from user_management
-    BACK_TO_MAIN_MENU_TEXT = translator.get("keyboards.user_management.back_to_main_menu")
-    
-    # ✨ --- THE GOLDEN FALLBACK PATTERN --- ✨
-    # This fallback will be used by MOST conversations in this module.
-    # It correctly handles the "Back to Main Menu" button and the /cancel command,
-    # and stops further handlers from running.
-    universal_admin_fallback = [
-        MessageHandler(filters.Regex(f'^{BACK_TO_MAIN_MENU_TEXT}$'), cancel_conversation_and_stop_propagation),
-        CommandHandler('cancel', cancel_conversation_and_stop_propagation)
+
+    # -------------------------------------------------------------------------
+    # 🛡️ EXIT GUARD: تعریف لیست دکمه‌هایی که باید مکالمه را قطع کنند
+    # -------------------------------------------------------------------------
+    EXIT_BUTTONS_TEXT = [
+        translator.get("keyboards.user_management.back_to_main_menu"),
+        translator.get("keyboards.admin_main_menu.manage_users"),
+        translator.get("keyboards.admin_main_menu.bot_settings"),
+        translator.get("keyboards.admin_main_menu.financials"),
+        translator.get("keyboards.admin_main_menu.support_panel"),
+        translator.get("keyboards.admin_main_menu.customer_panel_view"),
+        translator.get("keyboards.admin_main_menu.search_user"),
+        translator.get("keyboards.customer_main_menu.support_panel")
     ]
 
-    # This conversation is nested inside user_management_conv to handle adding users from that menu
+    exit_pattern = f"^({'|'.join(map(re.escape, EXIT_BUTTONS_TEXT))})$"
+    
+    # استفاده از تابع جدید universal_exit_handler بجای stop_propagation
+    exit_handler = MessageHandler(filters.Regex(exit_pattern), universal_exit_handler)
+    # -------------------------------------------------------------------------
+
+    # --- Get translated texts for filters ---
+    USER_MANAGEMENT_TEXT = translator.get("keyboards.admin_main_menu.manage_users")
+    BACK_TO_MAIN_MENU_TEXT = translator.get("keyboards.user_management.back_to_main_menu")
+    
+    # ✨ Universal Fallback
+    universal_admin_fallback = [
+        exit_handler, 
+        MessageHandler(filters.Regex(f'^{BACK_TO_MAIN_MENU_TEXT}$'), universal_exit_handler),
+        CommandHandler('cancel', universal_exit_handler)
+    ]
+
+    # --- Nested Conversation: Add User ---
     add_user_conv_nested = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{translator.get("keyboards.user_management.add_user")}$'), add_user.add_user_start)],
         states={
-            add_user.GET_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user.add_user_get_username)],
-            add_user.GET_DATALIMIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user.add_user_get_datalimit)],
-            add_user.GET_EXPIRE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user.add_user_get_expire)],
+            add_user.GET_USERNAME: [
+                exit_handler, 
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_user.add_user_get_username)
+            ],
+            add_user.GET_DATALIMIT: [
+                exit_handler, 
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_user.add_user_get_datalimit)
+            ],
+            add_user.GET_EXPIRE: [
+                exit_handler, 
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_user.add_user_get_expire)
+            ],
             add_user.CONFIRM_CREATION: [
                 CallbackQueryHandler(add_user.add_user_create, pattern='^confirm_add_user$'),
                 CallbackQueryHandler(add_user.cancel_add_user, pattern='^cancel_add_user$')
             ],
         },
-        fallbacks=[CommandHandler('cancel', display.show_user_management_menu)], # Special case: cancel returns to parent menu
+        fallbacks=[CommandHandler('cancel', display.show_user_management_menu)],
         conversation_timeout=600,
         map_to_parent={ ConversationHandler.END: USER_MENU }
     )
    
-    # Main User Management Conversation: The entry point for "مدیریت کاربران"
+    # --- Main Conversation: User Management ---
     user_management_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{USER_MANAGEMENT_TEXT}$') & admin_filter, display.prompt_for_panel_selection)],
         states={
             SELECT_PANEL: [
+                exit_handler, 
                 MessageHandler(filters.TEXT & ~filters.COMMAND, display.select_panel_and_show_menu)
             ],
             USER_MENU: [
-                add_user_conv_nested, # The add user conversation is nested here
+                add_user_conv_nested,
                 MessageHandler(filters.Regex(f'^{translator.get("keyboards.user_management.show_users")}$'), display.list_all_users_paginated),
                 MessageHandler(filters.Regex(f'^{translator.get("keyboards.user_management.expiring_users")}$'), display.list_warning_users_paginated),
                 MessageHandler(filters.Regex(f'^{translator.get("keyboards.user_management.back_to_panel_selection")}$'), display.prompt_for_panel_selection),
             ],
         },
-        fallbacks=universal_admin_fallback, # ✨ FIX: Uses the correct, universal fallback
+        fallbacks=universal_admin_fallback,
         allow_reentry=True,
     )
 
-
-    # Standalone conversation for adding a user for a specific customer (e.g., from an invoice)
+    # --- Conversation: Add User For Customer ---
     add_user_for_customer_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_user.add_user_for_customer_start, pattern=r'^create_user_for_')],
         states={
@@ -87,40 +132,60 @@ def register(application: Application) -> None:
                 CallbackQueryHandler(add_user.cancel_add_user, pattern='^cancel_add_user$') 
             ],
         },
-        fallbacks=universal_admin_fallback, # ✨ FIX: Uses the correct, universal fallback
+        fallbacks=universal_admin_fallback,
         conversation_timeout=600
     )
 
-    # Conversations triggered by inline keyboards (e.g., inside user details)
+    # --- Conversation: Edit Note / Price ---
     note_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(note.prompt_for_note_details, pattern=r'^note_')],
         states={
-            note.GET_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, note.get_duration_and_ask_for_data_limit), CallbackQueryHandler(note.delete_note_from_prompt, pattern=r'^delete_note_')],
-            note.GET_DATA_LIMIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, note.get_data_limit_and_ask_for_price)],
-            note.GET_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, note.get_price_and_save_note)],
+            note.GET_DURATION: [
+                exit_handler, 
+                MessageHandler(filters.TEXT & ~filters.COMMAND, note.get_duration_and_ask_for_data_limit), 
+                CallbackQueryHandler(note.delete_note_from_prompt, pattern=r'^delete_note_')
+            ],
+            note.GET_DATA_LIMIT: [
+                exit_handler, 
+                MessageHandler(filters.TEXT & ~filters.COMMAND, note.get_data_limit_and_ask_for_price)
+            ],
+            note.GET_PRICE: [
+                exit_handler, 
+                MessageHandler(filters.TEXT & ~filters.COMMAND, note.get_price_and_save_note)
+            ],
         }, 
-        fallbacks=universal_admin_fallback, # ✨ FIX: Uses the correct, universal fallback
+        fallbacks=universal_admin_fallback,
         conversation_timeout=600,
     )
     
+    # --- Conversation: Add Days ---
     add_days_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(modify_user.prompt_for_add_days, pattern=r'^add_days_')],
-        states={modify_user.ADD_DAYS_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, modify_user.do_add_days)]},
-        fallbacks=universal_admin_fallback, # ✨ FIX: Uses the correct, universal fallback
+        states={
+            modify_user.ADD_DAYS_PROMPT: [
+                exit_handler,
+                MessageHandler(filters.TEXT & ~filters.COMMAND, modify_user.do_add_days)
+            ]
+        },
+        fallbacks=universal_admin_fallback,
         conversation_timeout=600,
     )
     
+    # --- Conversation: Add Data ---
     add_data_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(modify_user.prompt_for_add_data, pattern=r'^add_data_')],
-        states={modify_user.ADD_DATA_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, modify_user.do_add_data)]},
-        fallbacks=universal_admin_fallback, # ✨ FIX: Uses the correct, universal fallback
+        states={
+            modify_user.ADD_DATA_PROMPT: [
+                exit_handler,
+                MessageHandler(filters.TEXT & ~filters.COMMAND, modify_user.do_add_data)
+            ]
+        },
+        fallbacks=universal_admin_fallback,
         conversation_timeout=600,
     )
     
-    # Conversations from "Helper Tools" menu have a different fallback
+    # --- Helper Tools ---
     helper_tools_fallback = [CommandHandler('cancel', cancel_to_helper_tools)]
-    
-    
     
     linking_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{translator.get("keyboards.helper_tools.create_connect_link")}$') & admin_filter, linking.start_linking_process)],
@@ -139,7 +204,7 @@ def register(application: Application) -> None:
 
     application.add_handler(MessageHandler(filters.Regex(f'^{translator.get("keyboards.admin_main_menu.customer_panel_view")}$') & admin_filter, switch_to_customer_view))
     
-    # --- Register Standalone Handlers (that are not part of any conversation) ---
+    # --- Register Standalone Handlers ---
     standalone_handlers = [
         CallbackQueryHandler(display.show_status_legend, pattern=r'^show_status_legend$'),
         CallbackQueryHandler(display.update_user_page, pattern=r'^show_users_page_'),

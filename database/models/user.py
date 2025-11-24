@@ -25,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
-from . import Base
+from .base import Base
 
 if TYPE_CHECKING:
     from .marzban_link import MarzbanTelegramLink

@@ -133,3 +133,5 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+get_async_session = get_session
