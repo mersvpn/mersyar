@@ -70,6 +70,15 @@ async def init_db() -> None:
             # We run this BEFORE indexing to ensure tables exist.
             await conn.run_sync(Base.metadata.create_all)
 
+            try:
+                await conn.execute(text("ALTER TABLE bot_managed_users ADD COLUMN created_by_admin_id BIGINT DEFAULT NULL"))
+                LOGGER.info("✅ Auto-healing: Column 'created_by_admin_id' added successfully.")
+            except Exception as e:
+                if "1060" in str(e) or "Duplicate column" in str(e):
+                    pass 
+                else:
+                    LOGGER.warning(f"Auto-healing notice: {e}")
+            # ---------------------------------------------------
             # 3. 🚀 PERFORMANCE BOOST: Create Indexes Automatically
             # This runs after create_all, so tables definitely exist.
             indexes_to_create = [

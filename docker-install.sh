@@ -169,7 +169,6 @@ manage_bot() {
             5)
                 info "Updating bot system to the latest version..."
                 warning "This process will rebuild the bot container."
-                info "Note: Database migrations are now handled automatically by the container startup script."
                 
                 info "Step 1: Stopping current services..."
                 docker compose down
@@ -188,7 +187,27 @@ manage_bot() {
                 info "Step 4: Starting services..."
                 if docker compose up -d; then
                     success "Containers started successfully!"
-                    success "The bot is now initializing. Check logs (Option 1) to see the migration status."
+                    
+                    # --- بخش جدید: انتظار برای بالا آمدن کانتینر ---
+                    info "Waiting for bot to initialize (5 seconds)..."
+                    sleep 5
+                    
+                    # --- بخش جدید: اجرای مایگریشن دیتابیس ---
+                    info "Running database migrations..."
+                    if ! docker compose exec -T bot alembic upgrade head; then
+                        warning "Migration failed, attempting to repair database schema..."
+                        # تلاش برای ترمیم (Stamping)
+                        LATEST_ID=$(docker compose exec -T bot alembic heads | awk '{print $1}')
+                        if docker compose exec -T bot alembic stamp "$LATEST_ID" && docker compose exec -T bot alembic upgrade head; then
+                            success "Database migration repaired and completed successfully."
+                        else
+                            error "Database migration failed. Please check logs."
+                        fi
+                    else
+                        success "Database updated successfully!"
+                    fi
+                    # ---------------------------------------------
+                    
                 else
                     error "Failed to start services."
                 fi
