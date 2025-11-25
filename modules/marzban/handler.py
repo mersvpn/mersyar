@@ -30,8 +30,7 @@ async def universal_exit_handler(update: Update, context: ContextTypes.DEFAULT_T
         text=translator.get("keyboards.general.cancel"),
         reply_markup=get_admin_main_menu_keyboard()
     )
-    
-    # پایان دادن به مکالمه فعلی
+
     return ConversationHandler.END
 
 def register(application: Application) -> None:
@@ -183,16 +182,24 @@ def register(application: Application) -> None:
         fallbacks=universal_admin_fallback,
         conversation_timeout=600,
     )
-    
-    # --- Helper Tools ---
-    helper_tools_fallback = [CommandHandler('cancel', cancel_to_helper_tools)]
-    
+
     linking_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f'^{translator.get("keyboards.helper_tools.create_connect_link")}$') & admin_filter, linking.start_linking_process)],
-        states={linking.PROMPT_USERNAME_FOR_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, linking.generate_linking_url)]},
-        fallbacks=helper_tools_fallback,
-        conversation_timeout=300
+        entry_points=[
+            CallbackQueryHandler(linking.start_linking_process, pattern='^link_customer_')
+        ],
+        states={
+            linking.GET_CUSTOMER_ID: [
+                MessageHandler(filters.TEXT | filters.FORWARDED, linking.process_linking_input)
+            ]
+        },
+        fallbacks=[
+            CommandHandler("cancel", linking.cancel_linking),
+            MessageHandler(filters.Regex("^🔙"), linking.cancel_linking)
+        ],
+        conversation_timeout=120
     )
+    # -----------------------------------------------------------
+
 
     # --- Register All Handlers ---
     application.add_handler(user_management_conv)

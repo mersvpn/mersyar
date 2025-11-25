@@ -12,15 +12,16 @@ PROJECT_DIR="/root/mersyar-docker"
 CLI_COMMAND_PATH="/usr/local/bin/mersyar"
 
 # ==============================================================================
-#                      --- NEW FEATURE --- BACKUP LOGIC
+#                      --- NEW FEATURE --- BACKUP LOGIC (FULLY AUTOMATED)
 # ==============================================================================
 setup_backup_job() {
     cd "$PROJECT_DIR"
     info "--- Automated Backup Setup ---"
     warning "This will schedule a periodic backup of your database and .env file."
 
-   
-    local DB_NAME_FOR_BACKUP="mersyar_bot_db"
+    # Force using the correct container name and DB name
+    local DB_CONTAINER_NAME="mersyar-db"
+    local DB_NAME_INTERNAL="mersyar_bot_db"
 
     read -p "Enter backup interval in minutes (e.g., 1440 for daily, 120 for every 2 hours): " INTERVAL
     read -p "Enter the Telegram Bot Token for sending backups: " BACKUP_BOT_TOKEN
@@ -31,6 +32,7 @@ setup_backup_job() {
         return 1
     fi
 
+    # Calculate Cron Schedule
     local cron_schedule
     if (( INTERVAL >= 1440 && INTERVAL % 1440 == 0 )); then
         local DAYS=$((INTERVAL / 1440))
@@ -44,83 +46,116 @@ setup_backup_job() {
         cron_schedule="*/${INTERVAL} * * * *"
         info "Scheduling a backup every ${INTERVAL} minute(s)."
     else
-        error "Invalid interval. For intervals of 60 minutes or more, please use a multiple of 60 (e.g., 60, 120, 180, 1440)."
+        error "Invalid interval. For intervals of 60 minutes or more, use multiples of 60."
         return 1
     fi
 
     info "Creating the backup script (backup_script.sh)..."
-    # --- [اصلاح ۲] قالب اسکریپت بکاپ به طور کامل بازنویسی و بهینه شد ---
+    
+    # --- FIXED BACKUP SCRIPT CONTENT WITH AUTO PATH INJECTION ---
     cat << EOF > "${PROJECT_DIR}/backup_script.sh"
 #!/bin/bash
-# Script Version: 2.0 - Optimized for single-database backup
-set -e
+# Script Version: 4.0 - Fully Automated
 
-# --- Configuration ---
-BOT_TOKEN="\$1"
-CHAT_ID="\$2"
+# 0. INJECT SYSTEM PATHS (Crucial for Cron execution)
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# 1. Configuration
+BOT_TOKEN="${BACKUP_BOT_TOKEN}"
+CHAT_ID="${BACKUP_CHAT_ID}"
 PROJECT_DIR="${PROJECT_DIR}"
-DB_CONTAINER="mersyar-db"
-DB_NAME="${DB_NAME_FOR_BACKUP}" # <-- استفاده از نام دیتابیس مشخص شده
+DB_CONTAINER="${DB_CONTAINER_NAME}"
+DB_NAME="${DB_NAME_INTERNAL}"
 
-# --- Dynamic variables ---
+# 2. Setup Variables
 TIMESTAMP=\$(date +%Y-%m-%d_%H-%M-%S)
 BACKUP_FILENAME="mersyar_backup_\${TIMESTAMP}.tar.gz"
-DB_DUMP_FILENAME="\${DB_NAME}_dump_\${TIMESTAMP}.sql"
+SQL_FILENAME="\${DB_NAME}_\${TIMESTAMP}.sql"
 
-# --- Main Execution ---
-cd "\$PROJECT_DIR" || { echo "Error: Failed to cd to \$PROJECT_DIR" >&2; exit 1; }
+cd "\$PROJECT_DIR" || exit 1
 
-echo "Starting backup for database: '\$DB_NAME'..."
-
+# 3. Get DB Root Password dynamically
 DB_ROOT_PASSWORD=\$(docker exec "\$DB_CONTAINER" printenv MYSQL_ROOT_PASSWORD | tr -d '\r')
+
 if [ -z "\$DB_ROOT_PASSWORD" ]; then
-    echo "Error: Could not get MYSQL_ROOT_PASSWORD from container." >&2
+    echo "Error: Could not retrieve MYSQL_ROOT_PASSWORD from container."
+    curl -s "https://api.telegram.org/bot\$BOT_TOKEN/sendMessage" -d "chat_id=\$CHAT_ID" -d "text=❌ Backup Failed: Could not get DB password." >/dev/null
     exit 1
 fi
 
-# --- [اصلاح ۳] دستور mysqldump برای بکاپ گرفتن فقط از دیتابیس ربات ---
+# 4. Perform Dump
 echo "Dumping database..."
-docker exec -e MYSQL_PWD="\$DB_ROOT_PASSWORD" "\$DB_CONTAINER" mysqldump -u root "\$DB_NAME" > "\$DB_DUMP_FILENAME"
+if docker exec -e MYSQL_PWD="\$DB_ROOT_PASSWORD" "\$DB_CONTAINER" mysqldump -u root "\$DB_NAME" > "\$SQL_FILENAME"; then
+    echo "Database dump successful."
+else
+    echo "Database dump failed."
+    curl -s "https://api.telegram.org/bot\$BOT_TOKEN/sendMessage" -d "chat_id=\$CHAT_ID" -d "text=❌ Backup Failed: mysqldump error." >/dev/null
+    rm -f "\$SQL_FILENAME"
+    exit 1
+fi
 
-echo "Creating archive: \$BACKUP_FILENAME..."
-tar -czf "\$BACKUP_FILENAME" "\$DB_DUMP_FILENAME" .env
+# 5. Compress
+echo "Compressing..."
+tar -czf "\$BACKUP_FILENAME" "\$SQL_FILENAME" .env
 
-echo "Sending backup to Telegram..."
-HTTP_CODE=\$(curl -s -o /dev/null -w "%{http_code}" -F "chat_id=\$CHAT_ID" -F "document=@\$BACKUP_FILENAME" -F "caption=mersyar Backup (\${DB_NAME}) - \$(date)" "https://api.telegram.org/bot\$BOT_TOKEN/sendDocument")
+# 6. Send to Telegram
+echo "Sending to Telegram..."
+CAPTION="📦 Backup: \${DB_NAME}
+📅 Date: \${TIMESTAMP}
+✅ Status: Automatic"
+
+HTTP_CODE=\$(curl -s -o /dev/null -w "%{http_code}" \
+    -F "chat_id=\$CHAT_ID" \
+    -F "document=@\$BACKUP_FILENAME" \
+    -F "caption=\$CAPTION" \
+    "https://api.telegram.org/bot\$BOT_TOKEN/sendDocument")
 
 if [ "\$HTTP_CODE" -eq 200 ]; then
     echo "Backup sent successfully."
 else
-    echo "Failed to send backup. HTTP Code: \$HTTP_CODE" >&2
+    echo "Failed to send backup. HTTP Code: \$HTTP_CODE"
 fi
 
-echo "Cleaning up temporary files..."
-rm "\$DB_DUMP_FILENAME" "\$BACKUP_FILENAME"
-echo "Backup process finished."
+# 7. Cleanup
+rm -f "\$SQL_FILENAME" "\$BACKUP_FILENAME"
 EOF
 
     chmod +x "${PROJECT_DIR}/backup_script.sh"
+
+    # --- Cron Job Setup (Robust Method) ---
     info "Scheduling the cron job..."
-    local cron_job="${cron_schedule} bash ${PROJECT_DIR}/backup_script.sh '$BACKUP_BOT_TOKEN' '$BACKUP_CHAT_ID' >/dev/null 2>&1 # MERSYAR_BACKUP_JOB"
-    local temp_cron_file
-    temp_cron_file=$(mktemp)
-    crontab -l 2>/dev/null | grep -v "# MERSYAR_BACKUP_JOB" > "$temp_cron_file"
-    echo "$cron_job" >> "$temp_cron_file"
-    crontab "$temp_cron_file"
-    local crontab_status=$?
-    rm "$temp_cron_file"
     
-    if [ $crontab_status -eq 0 ]; then
-        success "Backup job successfully scheduled!"
-        info "Running an initial test backup now..."
-        if bash "${PROJECT_DIR}/backup_script.sh" "$BACKUP_BOT_TOKEN" "$BACKUP_CHAT_ID"; then
-            success "Test backup completed. Please check your Telegram chat for the backup file."
-        else
-            error "The test backup failed. Please review the output above."
-            warning "Your backup job is still scheduled, but the credentials or IDs might be incorrect."
-        fi
+    # 1. Get current crontab (ignore error if empty)
+    EXISTING_CRON=$(crontab -l 2>/dev/null || true)
+    
+    # 2. Filter out old mersyar jobs
+    CLEAN_CRON=$(echo "$EXISTING_CRON" | grep -v "mersyar_backup" || true)
+    
+    # 3. Define new job
+    NEW_JOB="${cron_schedule} /bin/bash ${PROJECT_DIR}/backup_script.sh >> ${PROJECT_DIR}/backup.log 2>&1 # mersyar_backup"
+    
+    # 4. Install new crontab (Handle empty clean_cron correctly)
+    if [ -z "$CLEAN_CRON" ]; then
+        echo "$NEW_JOB" | crontab -
     else
-        error "Failed to schedule the cron job. An error occurred with crontab."
+        echo -e "${CLEAN_CRON}\n${NEW_JOB}" | crontab -
+    fi
+
+    # --- Verification ---
+    if crontab -l | grep -q "mersyar_backup"; then
+        success "Backup job successfully added to Cron!"
+        info "Schedule: $cron_schedule"
+        info "Logs will be saved to: ${PROJECT_DIR}/backup.log"
+    else
+        error "Failed to add job to Cron. Please check permissions."
+        return 1
+    fi
+    
+    # Test Run
+    read -p "Do you want to run a test backup now? (y/n): " RUN_TEST
+    if [[ "$RUN_TEST" == "y" ]]; then
+        info "Running test backup..."
+        /bin/bash "${PROJECT_DIR}/backup_script.sh"
     fi
 }
 # ==============================================================================

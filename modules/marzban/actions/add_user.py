@@ -124,8 +124,10 @@ async def _build_panel_selection_keyboard() -> Optional[InlineKeyboardMarkup]:
 async def add_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     from shared.translator import translator
     
+    # تلاش برای دریافت آی‌دی پنل از حافظه
     panel_id = context.user_data.get('selected_panel_id')
     
+    # اصلاحیه: اگر پنل در حافظه نبود (مثلاً بعد از لغو)، دوباره لیست را چک کن
     if not panel_id:
         panels = await crud_panel.get_all_panels()
         
@@ -137,22 +139,25 @@ async def add_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return ConversationHandler.END
         
         if len(panels) == 1:
+            # اگر فقط یک پنل داریم، همان را انتخاب کن
             panel_id = panels[0].id
             context.user_data['selected_panel_id'] = panel_id
             
         else:
+            # اگر چند پنل داریم، بپرس کدام پنل؟
             keyboard = await _build_panel_selection_keyboard()
             await update.message.reply_text(
                 "🌐 لطفاً پنل (سرور) مورد نظر برای ساخت کاربر را انتخاب کنید:",
                 reply_markup=keyboard
             )
-            # هدایت به مرحله انتخاب پنل
             return SELECT_PANEL
     # -----------------------------------------------------------------------
 
+    # ذخیره نهایی پنل انتخاب شده برای ادامه مراحل
     context.user_data['panel_id'] = panel_id
     context.user_data['new_user'] = {}
 
+    # بررسی وجود تمپلیت (کاربر الگو)
     template_config = await crud_template.load_template_config(panel_id)
     if not template_config or not template_config.template_username:
         await update.message.reply_text(
@@ -206,18 +211,27 @@ async def select_panel_for_creation(update: Update, context: ContextTypes.DEFAUL
     return GET_USERNAME
 
 async def add_user_get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    username = normalize_username(update.message.text)
+    from shared.translator import translator
+    
+    username_input = update.message.text
+    
     panel_id = int(context.user_data.get('panel_id', 0))
+
+    if panel_id == 0:
+
+        return ConversationHandler.END
+
+    username = normalize_username(username_input)
     
     api = await _get_api_for_panel(panel_id)
     if not api:
-        await update.message.reply_text(_("panel_manager.add.panel_not_found"))
+        await update.message.reply_text(translator.get("panel_manager.add.panel_not_found"))
         return ConversationHandler.END
 
     try:
         existing_user = await api.get_user_data(username)
         if existing_user:
-            await update.message.reply_text(_("marzban.marzban_add_user.username_exists", username=username))
+            await update.message.reply_text(translator.get("marzban.marzban_add_user.username_exists", username=username))
             return GET_USERNAME
     except Exception as e:
         LOGGER.error(f"Failed to check existing user: {e}")
@@ -225,7 +239,7 @@ async def add_user_get_username(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
     
     context.user_data['new_user']['username'] = username
-    await update.message.reply_text(_("marzban.marzban_add_user.step2_ask_datalimit"))
+    await update.message.reply_text(translator.get("marzban.marzban_add_user.step2_ask_datalimit"))
     return GET_DATALIMIT
 
 async def add_user_get_datalimit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

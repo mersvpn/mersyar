@@ -12,7 +12,6 @@ from database.crud import bot_managed_user as crud_bot_managed_user
 from shared import panel_utils
 from config import config
 
-# استفاده از ابزارهای نمایش ماژول مرزبان برای هماهنگی ظاهری
 from modules.marzban.actions.display import build_users_keyboard
 from modules.marzban.actions.constants import USERS_PER_PAGE
 
@@ -24,13 +23,14 @@ async def show_support_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """
     context.user_data.clear()
     
-    # ساخت ردیف اول دکمه‌ها (همیشه ثابت)
+    if update.callback_query:
+        await update.callback_query.answer()
+
     row_1 = [
         KeyboardButton(_("keyboards.user_management.add_user")),
         KeyboardButton(_("keyboards.admin_main_menu.search_user"))
     ]
     
-    # ردیف دوم: استفاده از ترجمه برای دکمه "کاربران من"
     row_2 = [KeyboardButton(_("keyboards.support_panel.my_users"))]
     
     keyboard = [
@@ -40,8 +40,8 @@ async def show_support_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     ]
     
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    
-    await update.message.reply_text(
+
+    await update.effective_chat.send_message(
         _("support_panel.welcome"),
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN
@@ -53,25 +53,21 @@ async def show_my_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """
     user_id = update.effective_user.id
     
-    # پیام "لطفا صبر کنید"
     waiting_msg = await update.message.reply_text(_("support_panel.my_users.loading"))
 
     try:
-        # 1. دریافت لیست از دیتابیس
         my_usernames = await crud_bot_managed_user.get_users_created_by(user_id)
         
         if not my_usernames:
             await waiting_msg.edit_text(_("support_panel.my_users.empty"))
             return
 
-        # 2. دریافت اطلاعات زنده از پنل
         all_panel_users = await panel_utils.get_all_users_from_all_panels()
         
         if not all_panel_users:
              await waiting_msg.edit_text(_("marzban_display.panel_connection_error"))
              return
 
-        # 3. فیلتر کردن
         my_usernames_set = set(my_usernames)
         
         my_filtered_users = [
@@ -85,10 +81,8 @@ async def show_my_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await waiting_msg.edit_text(_("support_panel.my_users.panel_empty"))
             return
 
-        # 4. ذخیره در user_data
         context.user_data['last_search_results'] = my_filtered_users
         
-        # 5. نمایش
         page_users = my_filtered_users[:USERS_PER_PAGE]
         total_pages = math.ceil(len(my_filtered_users) / USERS_PER_PAGE)
         
@@ -123,7 +117,6 @@ async def handle_my_users_pagination(update: Update, context: ContextTypes.DEFAU
         
     users_list = context.user_data.get('last_search_results', [])
     
-    # --- بازیابی خودکار اطلاعات ---
     if not users_list:
         try:
             await query.edit_message_text(_("support_panel.my_users.refreshing"))

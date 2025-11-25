@@ -89,7 +89,7 @@ def get_helper_tools_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(_("keyboards.helper_tools.daily_automation"))],
         [KeyboardButton(_("keyboards.helper_tools.manage_admins"))],
         [KeyboardButton(_("keyboards.helper_tools.set_forced_join_channel"))],
-        [KeyboardButton(_("keyboards.helper_tools.create_connect_link")), KeyboardButton(_("keyboards.helper_tools.test_account_settings"))],
+        [KeyboardButton(_("keyboards.helper_tools.test_account_settings"))],
         [KeyboardButton(_("keyboards.helper_tools.back_to_settings"))]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

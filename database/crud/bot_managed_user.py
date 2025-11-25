@@ -2,11 +2,12 @@
 import logging
 from typing import List
 
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, union
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from ..engine import get_session
 from ..models.bot_managed_user import BotManagedUser
+from ..models.marzban_link import MarzbanTelegramLink
 
 LOGGER = logging.getLogger(__name__)
 
@@ -21,7 +22,6 @@ async def get_all_managed_users() -> List[str]:
 
 async def add_to_managed_list(marzban_username: str, created_by_admin_id: int = None) -> bool:
     """Adds a username to the bot-managed list with creator ID."""
-    # مقدار دهی ستون جدید در اینجا انجام می‌شود 👇
     stmt = mysql_insert(BotManagedUser).values(
         marzban_username=marzban_username,
         created_by_admin_id=created_by_admin_id
@@ -52,10 +52,23 @@ async def remove_from_managed_list(marzban_username: str) -> bool:
             return False
         
 async def get_users_created_by(admin_id: int) -> List[str]:
-    """Returns a list of usernames created by a specific admin."""
+    """
+    Optimized version: Retrieves all related users in a SINGLE database query.
+    """
     async with get_session() as session:
-        stmt = select(BotManagedUser.marzban_username).where(BotManagedUser.created_by_admin_id == admin_id)
-        result = await session.execute(stmt)
-        return list(result.scalars().all())
+        created_subq = select(BotManagedUser.marzban_username).where(
+            BotManagedUser.created_by_admin_id == admin_id
+        )
 
-# --- END OF FILE database/crud/bot_managed_user.py ---
+        customers_subq = select(MarzbanTelegramLink.telegram_user_id).where(
+            MarzbanTelegramLink.marzban_username.in_(created_subq)
+        )
+
+        siblings_query = select(MarzbanTelegramLink.marzban_username).where(
+            MarzbanTelegramLink.telegram_user_id.in_(customers_subq)
+        )
+
+        final_stmt = union(siblings_query, created_subq)
+
+        result = await session.execute(final_stmt)
+        return list(result.scalars().all())

@@ -459,6 +459,10 @@ async def show_user_details_panel(context: ContextTypes.DEFAULT_TYPE, chat_id: i
     keyboard_rows = [
         [InlineKeyboardButton(translator.get("marzban.marzban_display.button_smart_renew"), callback_data=f"renew_{username}"), InlineKeyboardButton(translator.get("marzban.marzban_display.button_send_invoice"), callback_data=send_invoice_callback)],
         [InlineKeyboardButton(translator.get("marzban.marzban_display.button_add_data"), callback_data=f"add_data_{username}"), InlineKeyboardButton(translator.get("marzban.marzban_display.button_add_days"), callback_data=f"add_days_{username}")],
+        [
+            InlineKeyboardButton("🔗 اتصال به مشتری", callback_data=f"link_customer_{username}"),
+            InlineKeyboardButton(translator.get("marzban.marzban_display.button_subscription_link"), callback_data=f"sub_link_{username}")
+        ],
         [InlineKeyboardButton(translator.get("marzban.marzban_display.button_reset_traffic"), callback_data=f"reset_traffic_{username}"), InlineKeyboardButton(translator.get("marzban.marzban_display.button_subscription_info"), callback_data=f"note_{username}")],
         [InlineKeyboardButton(translator.get("marzban.marzban_display.button_subscription_link"), callback_data=f"sub_link_{username}"), InlineKeyboardButton(translator.get("marzban.marzban_display.button_delete_user"), callback_data=f"delete_{username}")],
         [InlineKeyboardButton(back_button_text, callback_data=back_button_callback)]
