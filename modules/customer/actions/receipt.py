@@ -7,6 +7,10 @@ from telegram.ext import (
     CallbackQueryHandler, 
     filters
 )
+
+from database.crud import bot_managed_user as crud_bot_managed_user
+from database.crud import marzban_link as crud_marzban_link
+
 from database.crud import panel_credential as crud_panel
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
@@ -185,7 +189,18 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     ])
 
     admin_message_ids = {}
-    for admin_id in config.AUTHORIZED_USER_IDS:
+    receivers = config.AUTHORIZED_USER_IDS 
+    
+    user_links = await crud_marzban_link.get_links_by_telegram_id_with_panel(user.id)
+    if user_links:
+        for link in user_links:
+            owner_id = await crud_bot_managed_user.get_owner_of_user(link.marzban_username)
+            if owner_id and owner_id not in config.AUTHORIZED_USER_IDS:
+                receivers = [owner_id] 
+                break 
+
+    for admin_id in receivers:
+    # --------------------------------------
         try:
             sent_message = await context.bot.send_photo(chat_id=admin_id, photo=photo_file_id, caption=caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
             admin_message_ids[admin_id] = sent_message.message_id
@@ -193,8 +208,14 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             LOGGER.error(f"Failed to forward receipt for invoice #{invoice_id} to admin {admin_id}: {e}")
 
     bot_settings = await crud_bot_setting.load_bot_settings()
-    if bot_settings.get('auto_confirm_invoices', False):
-        LOGGER.info(f"Auto-confirm is ENABLED for invoice #{invoice_id}. Scheduling job.")
+    is_global_auto_on = bot_settings.get('auto_confirm_invoices', False)
+
+    is_super_admin_recipient = False
+    if receivers and (receivers[0] in config.AUTHORIZED_USER_IDS):
+        is_super_admin_recipient = True
+
+    if is_global_auto_on and is_super_admin_recipient:
+        LOGGER.info(f"Auto-confirm active for Super Admin (Invoice #{invoice_id}). Scheduling job.")
         
         job_data = {
             'invoice_id': invoice_id,
@@ -209,9 +230,8 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             data=job_data,
             name=f"auto_approve_{invoice_id}"
         )
-
-    context.user_data.clear()
-    return ConversationHandler.END
+    elif is_global_auto_on and not is_super_admin_recipient:
+        LOGGER.info(f"Auto-confirm skipped for Invoice #{invoice_id} (Recipient is Support Admin). Manual approval required.")
 
 async def warn_for_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(_("customer.receipt.invalid_input_warning"))

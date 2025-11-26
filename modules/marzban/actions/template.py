@@ -4,7 +4,7 @@ import html
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
-
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from database.crud import panel_credential as crud_panel
 from .constants import SET_TEMPLATE_USER_PROMPT
 from database.crud import template_config as crud_template
@@ -16,8 +16,9 @@ LOGGER = logging.getLogger(__name__)
 
 async def set_template_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     from shared.translator import _
+    from shared.translator import translator 
+    
     query = update.callback_query
-    print(f"!!!!!!!!!!!!!!!!! RECEIVED CALLBACK DATA: {query.data} !!!!!!!!!!!!!!!!!")
     await query.answer()
 
     try:
@@ -36,28 +37,39 @@ async def set_template_user_start(update: Update, context: ContextTypes.DEFAULT_
 
     template_config_obj = await crud_template.load_template_config(panel_id)
     current_template = template_config_obj.template_username if template_config_obj else _("marzban_template.not_set")
-    LOGGER.info(f"[Template] Entering template setup for panel ID {panel_id}. Current: '{current_template}'")
-
+    
     safe_panel_name = html.escape(panel.name)
 
     message = _("marzban_template.title_for_panel", panel_name=f"*{safe_panel_name}*")
-    message += _("marzban_template.description")
-    message += _("marzban_template.current_template", template=f"`{current_template}`")
-    message += _("marzban_template.prompt")
+    message += "\n" + _("marzban_template.description")
+    message += "\n" + _("marzban_template.current_template", template=f"`{current_template}`")
+    message += "\n\n" + _("marzban_template.prompt")
+    # -------------------------------------------
+
+    back_text = translator.get("keyboards.panel_management.back_to_settings")
+    reply_markup = ReplyKeyboardMarkup(
+        [[KeyboardButton(back_text)]],
+        resize_keyboard=True,
+        is_persistent=True
+    )
 
     try:
-        await query.edit_message_text(
-            message, parse_mode=ParseMode.MARKDOWN
-        )
-    except Exception as e:
-        LOGGER.error(f"Error editing message in template_start: {e}", exc_info=True)
-        # Fallback for safety
-        await query.message.reply_text("An error occurred displaying the menu.")
+        await query.message.delete()
+    except Exception:
+        pass
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=message,
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
+    )
 
     return SET_TEMPLATE_USER_PROMPT
 
 async def set_template_user_process(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    from shared.translator import _
+    from shared.translator import _, translator
+    from modules.panel_manager.actions import show_panel_management_menu
     
     panel_id = context.user_data.get('template_panel_id')
     panel_name = context.user_data.get('template_panel_name', 'Unknown')
@@ -66,7 +78,18 @@ async def set_template_user_process(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text(_("errors.generic_error_try_again"))
         return ConversationHandler.END
 
-    username = normalize_username(update.message.text.strip())
+    username = update.message.text.strip()
+
+    back_text = translator.get("keyboards.panel_management.back_to_settings")
+    
+    if username == back_text:
+        await update.message.reply_text("🔙 بازگشت به منوی مدیریت پنل.")
+        await show_panel_management_menu(update, context)
+        context.user_data.clear()
+        return ConversationHandler.END
+    # -----------------------------------
+
+    username = normalize_username(username)
     
     await update.message.reply_text(_("marzban_template.checking_user", username=f"`{username}`"))
 
@@ -100,4 +123,3 @@ async def set_template_user_process(update: Update, context: ContextTypes.DEFAUL
     )
     context.user_data.clear()
     return ConversationHandler.END
-# --- END: Replacement ---

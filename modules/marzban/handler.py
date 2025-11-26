@@ -17,19 +17,38 @@ import re
 # Define Conversation States
 SELECT_PANEL, USER_MENU = range(2)
 
-# --- تابع جدید برای خروج هوشمند ---
+# --- تابع خروج هوشمند و بی‌صدا ---
 async def universal_exit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    این تابع وقتی اجرا می‌شود که کاربر وسط مکالمه دکمه‌ای از منوی اصلی را بزند.
-    مکالمه را می‌بندد و منوی اصلی را مجدداً ارسال می‌کند تا کاربر بداند آزاد شده است.
+    این تابع بررسی می‌کند که کاربر چه دکمه‌ای زده است.
+    - اگر دکمه 'لغو' باشد: پیام انصراف می‌دهد.
+    - اگر دکمه‌های منو باشد: ساکت می‌ماند و فقط مکالمه فعلی را می‌بندد.
     """
-    user_id = update.effective_user.id
+    user_text = update.message.text
     
-    # ارسال پیام لغو و نمایش مجدد منوی اصلی
-    await update.message.reply_text(
-        text=translator.get("keyboards.general.cancel"),
-        reply_markup=get_admin_main_menu_keyboard()
-    )
+    # لیست دکمه‌هایی که باید پیام "لغو شد" بدهند (فقط دکمه‌های قرمز)
+    cancel_triggers = [
+        translator.get("keyboards.general.cancel"),
+        translator.get("keyboards.keyboard.cancel"),
+        translator.get("keyboards.buttons.cancel"),
+        translator.get("keyboards.user_management.back_to_main_menu"),
+        '/cancel'
+    ]
+
+    # پاکسازی حافظه موقت برای جلوگیری از تداخل در دستور بعدی
+    context.user_data.clear()
+
+    # اگر کاربر واقعاً لغو را زده باشد
+    if user_text in cancel_triggers:
+        await update.message.reply_text(
+            text="❌ عملیات لغو شد.",
+            reply_markup=get_admin_main_menu_keyboard()
+        )
+    else:
+        # اگر کاربر دکمه‌های منو (مثل تنظیمات، مالی و...) را زده باشد
+        # هیچ پیامی نمی‌دهیم (سکوت) تا مزاحم کار جدید نشویم
+        # این باعث می‌شود کاربر حس کند ربات آماده دستور جدید است
+        pass 
 
     return ConversationHandler.END
 
@@ -43,27 +62,53 @@ def register(application: Application) -> None:
     admin_filter = filters.User(user_id=config.AUTHORIZED_USER_IDS)
 
     # -------------------------------------------------------------------------
-    # 🛡️ EXIT GUARD: تعریف لیست دکمه‌هایی که باید مکالمه را قطع کنند
+    # 🛡️ EXIT GUARD: لیست تمام دکمه‌هایی که باید مکالمه را قطع کنند
     # -------------------------------------------------------------------------
+    # نکته مهم: اینجا تمام دکمه‌های منوهای اصلی و فرعی را اضافه می‌کنیم
     EXIT_BUTTONS_TEXT = [
+        # دکمه‌های لغو
+        translator.get("keyboards.general.cancel"),
+        translator.get("keyboards.keyboard.cancel"),
+        translator.get("keyboards.buttons.cancel"),
         translator.get("keyboards.user_management.back_to_main_menu"),
+        
+        # دکمه‌های منوی اصلی ادمین
         translator.get("keyboards.admin_main_menu.manage_users"),
+        translator.get("keyboards.admin_main_menu.marzban_management"),
         translator.get("keyboards.admin_main_menu.bot_settings"),
+        translator.get("keyboards.admin_main_menu.settings_and_tools"),
         translator.get("keyboards.admin_main_menu.financials"),
+        translator.get("keyboards.admin_main_menu.financial_management"),
         translator.get("keyboards.admin_main_menu.support_panel"),
         translator.get("keyboards.admin_main_menu.customer_panel_view"),
         translator.get("keyboards.admin_main_menu.search_user"),
+        translator.get("keyboards.admin_main_menu.broadcaster"),
+        translator.get("keyboards.admin_main_menu.broadcast"),
+        translator.get("keyboards.admin_main_menu.guides"),
+        
+        # دکمه‌های زیرمنوی مدیریت کاربر
+        translator.get("keyboards.user_management.show_users"),
+        translator.get("keyboards.user_management.expiring_users"),
+        translator.get("keyboards.user_management.add_user"),
+        translator.get("keyboards.user_management.back_to_panel_selection"),
+        
+        # دکمه‌های منوی مشتری (برای احتیاط)
         translator.get("keyboards.customer_main_menu.support_panel")
     ]
 
-    exit_pattern = f"^({'|'.join(map(re.escape, EXIT_BUTTONS_TEXT))})$"
+    # ساخت الگوی Regex برای تشخیص دکمه‌ها
+    valid_buttons = [re.escape(str(b)) for b in EXIT_BUTTONS_TEXT if b]
+    exit_pattern = f"^({'|'.join(valid_buttons)})$"
     
-    # استفاده از تابع جدید universal_exit_handler بجای stop_propagation
+    # هندلر خروج
     exit_handler = MessageHandler(filters.Regex(exit_pattern), universal_exit_handler)
     # -------------------------------------------------------------------------
 
     # --- Get translated texts for filters ---
     USER_MANAGEMENT_TEXT = translator.get("keyboards.admin_main_menu.manage_users")
+    if not USER_MANAGEMENT_TEXT: # Fallback check
+         USER_MANAGEMENT_TEXT = translator.get("keyboards.admin_main_menu.marzban_management")
+
     BACK_TO_MAIN_MENU_TEXT = translator.get("keyboards.user_management.back_to_main_menu")
     
     # ✨ Universal Fallback
@@ -94,7 +139,7 @@ def register(application: Application) -> None:
                 CallbackQueryHandler(add_user.cancel_add_user, pattern='^cancel_add_user$')
             ],
         },
-        fallbacks=[CommandHandler('cancel', display.show_user_management_menu)],
+        fallbacks=universal_admin_fallback,
         conversation_timeout=600,
         map_to_parent={ ConversationHandler.END: USER_MENU }
     )
@@ -183,23 +228,22 @@ def register(application: Application) -> None:
         conversation_timeout=600,
     )
 
+    # --- Conversation: Linking User to Customer ---
     linking_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(linking.start_linking_process, pattern='^link_customer_')
         ],
         states={
             linking.GET_CUSTOMER_ID: [
+                exit_handler,
+                MessageHandler(filters.Regex("^🔙"), linking.cancel_linking),
+                CommandHandler("cancel", linking.cancel_linking),
                 MessageHandler(filters.TEXT | filters.FORWARDED, linking.process_linking_input)
             ]
         },
-        fallbacks=[
-            CommandHandler("cancel", linking.cancel_linking),
-            MessageHandler(filters.Regex("^🔙"), linking.cancel_linking)
-        ],
+        fallbacks=universal_admin_fallback,
         conversation_timeout=120
     )
-    # -----------------------------------------------------------
-
 
     # --- Register All Handlers ---
     application.add_handler(user_management_conv)

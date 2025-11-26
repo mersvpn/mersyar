@@ -72,3 +72,14 @@ async def get_users_created_by(admin_id: int) -> List[str]:
 
         result = await session.execute(final_stmt)
         return list(result.scalars().all())
+    
+
+async def get_owner_of_user(marzban_username: str) -> int | None:
+    """
+    Returns the telegram ID of the admin who created this user.
+    Returns None if not found or created by system.
+    """
+    async with get_session() as session:
+        stmt = select(BotManagedUser.created_by_admin_id).where(BotManagedUser.marzban_username == marzban_username)
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()

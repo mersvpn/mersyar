@@ -208,41 +208,54 @@ manage_bot() {
                 info "Step 1: Stopping current services..."
                 docker compose down
                 
-                info "Step 2: Cleaning up build cache..."
+                # --- دانلود کد جدید ---
+                info "Step 2: Downloading latest source code from GitHub..."
+                GITHUB_USER="mersvpn"
+                GITHUB_REPO="mersyar"
+                
+                LATEST_TAG=$(wget -qO- "https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+                
+                if [ -z "$LATEST_TAG" ]; then
+                    warning "Could not find latest release. Pulling from main branch..."
+                    git pull origin main || echo "Git pull failed..."
+                else
+                    info "Downloading version: $LATEST_TAG"
+                    wget -q "https://github.com/${GITHUB_USER}/${GITHUB_REPO}/archive/refs/tags/${LATEST_TAG}.tar.gz" -O latest.tar.gz
+                    tar -xzf latest.tar.gz --strip-components=1 --exclude='.env' --overwrite
+                    rm latest.tar.gz
+                    success "Source code updated to $LATEST_TAG"
+                fi
+                
+                # --- اصلاحیه مهم: دادن مجوز اجرا به فایل استارت ---
+                info "Fixing file permissions..."
+                chmod +x entrypoint.sh
+                # ------------------------------------------------
+                
+                info "Step 3: Cleaning up build cache..."
                 docker builder prune -f >/dev/null 2>&1
                 
-                info "Step 3: Building new image (Downloading latest code from GitHub)..."
+                info "Step 4: Building new image..."
                 if ! docker compose build --no-cache bot; then
-                    error "Failed to build the new image. Aborting update."
-                    info "Attempting to restart previous version..."
+                    error "Failed to build image. Check logs."
                     docker compose up -d
                     show_menu; return
                 fi
                 
-                info "Step 4: Starting services..."
+                info "Step 5: Starting services..."
                 if docker compose up -d; then
-                    success "Containers started successfully!"
-                    
-                    # --- بخش جدید: انتظار برای بالا آمدن کانتینر ---
-                    info "Waiting for bot to initialize (5 seconds)..."
+                    success "Containers started!"
+                    info "Waiting for bot to initialize..."
                     sleep 5
                     
-                    # --- بخش جدید: اجرای مایگریشن دیتابیس ---
                     info "Running database migrations..."
                     if ! docker compose exec -T bot alembic upgrade head; then
-                        warning "Migration failed, attempting to repair database schema..."
-                        # تلاش برای ترمیم (Stamping)
+                         # تلاش برای ترمیم خودکار دیتابیس
+                        warning "Migration failed, attempting repair..."
                         LATEST_ID=$(docker compose exec -T bot alembic heads | awk '{print $1}')
-                        if docker compose exec -T bot alembic stamp "$LATEST_ID" && docker compose exec -T bot alembic upgrade head; then
-                            success "Database migration repaired and completed successfully."
-                        else
-                            error "Database migration failed. Please check logs."
-                        fi
-                    else
-                        success "Database updated successfully!"
+                        docker compose exec -T bot alembic stamp "$LATEST_ID"
+                        docker compose exec -T bot alembic upgrade head
                     fi
-                    # ---------------------------------------------
-                    
+                    success "Update Complete!"
                 else
                     error "Failed to start services."
                 fi

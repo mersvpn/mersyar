@@ -55,14 +55,15 @@ def register_gatekeeper(application: Application):
 def register_commands(application: Application):
     """Registers general commands and message handlers that should have lower priority."""
 
-    # --- FIX: Catch BOTH 'Back to Main Menu' (General) AND 'Back to Settings' (Settings) ---
-    # This ensures that wherever the user clicks "Back to Main Menu", it's handled consistently here.
-    back_settings_text = translator.get("keyboards.settings_and_tools.back_to_main_menu")
-    back_general_text = translator.get("keyboards.general.back_to_main_menu")
-    
-    back_buttons = []
-    if back_settings_text: back_buttons.append(back_settings_text)
-    if back_general_text: back_buttons.append(back_general_text)
+    # --- اصلاحیه: اولویت بالا (Group 0) برای دکمه بازگشت ---
+    # این هندلر باید قبل از هندلرهای مشتری یا کچ-آل اجرا شود
+    back_texts = [
+        translator.get("keyboards.settings_and_tools.back_to_main_menu"),
+        translator.get("keyboards.general.back_to_main_menu"),
+        "🔙 بازگشت به منوی اصلی"  # جهت اطمینان (Hardcode)
+    ]
+    # حذف مقادیر خالی (None)
+    back_buttons = [t for t in back_texts if t]
 
     if back_buttons:
         application.add_handler(
@@ -70,8 +71,9 @@ def register_commands(application: Application):
                 filters.Text(back_buttons) & filters.User(user_id=config.AUTHORIZED_USER_IDS),
                 back_to_main_menu_simple
             ),
-            group=1 
+            group=0  # تغییر مهم: اولویت صفر (اجرا قبل از بقیه)
         )
+    # ------------------------------------------------------
 
     # --- CORE COMMANDS ---
     application.add_handler(CommandHandler("start", start), group=1)

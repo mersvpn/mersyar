@@ -50,8 +50,19 @@ def _gatekeeper(handler_func, filter_instance):
             pass
     return wrapped_handler
 
-MAIN_MENU_REGEX = r'^(🛍️خرید اشتـــراک|📊ســــــــرویس‌های من|📱 راهــــــــــنمای اتصال|🔙 بازگشت به منوی اصلی)$'
+# --- اصلاحیه: خواندن متن دکمه‌ها از ترجمه برای تشخیص دقیق ---
+main_menu_buttons = [
+    _("keyboards.customer_main_menu.shop"),
+    _("keyboards.customer_main_menu.my_services"),
+    _("keyboards.customer_main_menu.connection_guide"),
+    _("keyboards.general.back_to_main_menu"), # دکمه مهم بازگشت
+    "🔙 بازگشت به منوی اصلی" # محض اطمینان
+]
+# حذف مقادیر خالی و ساخت الگوی Regex
+safe_buttons = [re.escape(str(b)) for b in main_menu_buttons if b]
+MAIN_MENU_REGEX = f"^({'|'.join(safe_buttons)})$"
 
+# حالا فیلتر دقیقاً دکمه بازگشت را نادیده می‌گیرد تا هندلر اصلی اجرا شود
 IGNORE_MAIN_MENU_FILTER = filters.TEXT & ~filters.COMMAND & ~filters.Regex(MAIN_MENU_REGEX)
 
 DISPLAY_PANEL = 0
