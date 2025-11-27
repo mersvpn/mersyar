@@ -25,19 +25,27 @@ async def send_renewal_invoice_to_user(context: ContextTypes.DEFAULT_TYPE, user_
             LOGGER.error(f"Cannot send renewal invoice to {username}: Financial settings not configured.")
             return
 
-        # Simplified plan_details for consistency. The source of truth is user_note.
+        # 1. اول محاسبه را انجام می‌دهیم
+        payment_info = await calculate_payment_details(user_telegram_id, price)
+        payable_amount = payment_info["payable_amount"]
+        paid_from_wallet = payment_info["paid_from_wallet"]
+        has_sufficient_funds = payment_info["has_sufficient_funds"]
+
+        # 2. جزئیات پلن را آماده می‌کنیم
         plan_details = {
             'invoice_type': 'RENEWAL',
             'username': username,
-            'duration': renewal_days,      # <-- این خط اضافه شد
-            'volume': data_limit_gb,       # <-- این خط اضافه شد
+            'duration': renewal_days,
+            'volume': data_limit_gb,
             'price': price
         }
         
+        # 3. فاکتور را می‌سازیم و مقدار کسر از کیف پول را هم ذخیره می‌کنیم
         invoice_obj = await crud_invoice.create_pending_invoice({
             'user_id': user_telegram_id,
             'plan_details': plan_details,
-            'price': price
+            'price': price,
+            'from_wallet_amount': paid_from_wallet  # <-- این مقدار بسیار مهم است
         })
 
         if not invoice_obj:

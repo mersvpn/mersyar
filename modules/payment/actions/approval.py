@@ -356,10 +356,11 @@ async def approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, au
             await query.edit_message_caption(caption=f"{query.message.caption}\n\n{_('financials_payment.invoice_already_processed')}")
         return
 
-    if not auto_approved and invoice.from_wallet_amount > 0:
+    if invoice.from_wallet_amount > 0:
         new_balance = await crud_user.decrease_wallet_balance(user_id=invoice.user_id, amount=invoice.from_wallet_amount)
         if new_balance is None:
-            await query.edit_message_caption(caption=f"{query.message.caption}\n\n{_('financials_payment.error_insufficient_funds_on_approval')}")
+            if query and query.message:
+                await query.edit_message_caption(caption=f"{query.message.caption}\n\n{_('financials_payment.error_insufficient_funds_on_approval')}")
             return
 
     plan_details = invoice.plan_details

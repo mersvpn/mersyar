@@ -267,7 +267,8 @@ def register(application: Application) -> None:
         CallbackQueryHandler(modify_user.do_delete_user, pattern=r'^do_delete_user_'),
         CallbackQueryHandler(note.list_users_with_subscriptions, pattern=r'^list_subs_page_'),
         CallbackQueryHandler(payment_actions.send_manual_invoice, pattern=r'^send_invoice_'),
-        CommandHandler("start", display.handle_deep_link_details, filters=filters.Regex(r'details_'))
+        CommandHandler("start", display.handle_deep_link_details, filters=filters.Regex(r'details_')),
+        MessageHandler(filters.Regex(f'^{translator.get("keyboards.user_management.back_to_panel_selection")}$'), display.prompt_for_panel_selection)
     ]
     for handler in standalone_handlers:
         application.add_handler(handler)

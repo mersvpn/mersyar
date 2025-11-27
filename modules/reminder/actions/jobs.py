@@ -51,7 +51,10 @@ async def _perform_auto_renewal(context: ContextTypes.DEFAULT_TYPE, telegram_use
         'price': price, 'invoice_type': 'RENEWAL'
     }
     invoice_obj = await crud_invoice.create_pending_invoice({
-        'user_id': telegram_user_id, 'plan_details': plan_details, 'price': int(price)
+        'user_id': telegram_user_id, 
+        'plan_details': plan_details, 
+        'price': int(price),
+        'from_wallet_amount': price  # تغییر: ثبت صریح اینکه کل مبلغ از کیف پول است
     })
     if not invoice_obj:
         LOGGER.critical(f"CRITICAL: Wallet balance for {marzban_username} was deducted, but invoice creation failed. Rolling back.")
@@ -135,7 +138,9 @@ async def check_users_for_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             panel_user = panel_users_dict.get(marzban_username)
             note_info = await crud_user_note.get_user_note(marzban_username)
             
-            if not panel_user or panel_user.get('status') != 'active' or (note_info and note_info.is_test_account):
+            if not panel_user or panel_user.get('status') not in ['active', 'limited'] or (note_info and note_info.is_test_account):
+                if panel_user:
+                     LOGGER.info(f"Skipping auto-renew for {marzban_username}: Status is {panel_user.get('status')}")
                 continue
 
             if expire_ts := panel_user.get('expire'):

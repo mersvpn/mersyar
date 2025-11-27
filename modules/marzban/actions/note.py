@@ -88,7 +88,7 @@ async def get_price_and_save_note(update: Update, context: ContextTypes.DEFAULT_
     username = context.user_data.get('note_username')
     if not username: 
         if update.effective_user.id in config.AUTHORIZED_USER_IDS:
-             from shared.keyboards import get_user_management_keyboard
+             
              reply_markup = get_user_management_keyboard()
         else:
              from modules.support_panel.actions import show_support_menu

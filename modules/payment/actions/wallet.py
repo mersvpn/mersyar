@@ -11,6 +11,7 @@ from database.crud import user as crud_user
 from shared.translator import _
 from .approval import approve_payment
 from shared.log_channel import send_log
+from decimal import Decimal
 
 LOGGER = logging.getLogger(__name__)
 
@@ -72,7 +73,22 @@ async def pay_with_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     LOGGER.info(f"Start pay_with_wallet called: user_id={user_id}, invoice_id={invoice_id}, amount={price}")
 
-    new_balance = await crud_user.decrease_wallet_balance(user_id=user_id, amount=price)
+    # جلوگیری از کسر دوباره: اگر فاکتور خودش تنظیم شده که از کیف پول کم شود، اینجا فقط موجودی را چک می‌کنیم
+    if invoice.from_wallet_amount > 0:
+        current_balance = await crud_user.get_user_wallet_balance(user_id)
+        # موجودی را با قیمت مقایسه می‌کنیم
+        if current_balance is not None and current_balance >= Decimal(str(price)):
+            # اینجا کسر نمی‌کنیم، چون approval.py کسر خواهد کرد
+            new_balance = current_balance - Decimal(str(price)) # محاسبه برای نمایش در لاگ
+            LOGGER.info(f"Wallet check passed for user_id={user_id}. Deduction delegated to approval.")
+        else:
+            new_balance = None
+    else:
+        # اگر فاکتور معمولی است اما کاربر می‌خواهد با کیف پول بدهد، همین‌جا کسر می‌کنیم
+        new_balance = await crud_user.decrease_wallet_balance(user_id=user_id, amount=price)
+        if new_balance is not None:
+            LOGGER.info(f"Wallet balance decreased locally for user_id={user_id}, amount={price}")
+
 
     if new_balance is not None:
         LOGGER.info(f"Wallet balance decreased successfully for user_id={user_id}, amount={price}")
