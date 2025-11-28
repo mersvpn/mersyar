@@ -1,13 +1,12 @@
 # FILE: modules/reminder/actions/jobs.py (FULLY REWRITTEN FOR MULTI-PANEL)
+# --- START OF FILE ---
 
 import datetime
 import logging
 import jdatetime
 from telegram.ext import ContextTypes, Application
 from telegram.constants import ParseMode
-from telegram.helpers import escape_markdown
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-import asyncio
 
 # Use the correct, panel-aware functions and helpers
 from shared import panel_utils
@@ -23,16 +22,18 @@ from database.crud import (
     user as crud_user,
     marzban_link as crud_marzban_link
 )
-from modules.marzban.actions.data_manager import cleanup_marzban_user_data, normalize_username
+from modules.marzban.actions.data_manager import cleanup_marzban_user_data
 from modules.payment.actions.approval import approve_payment
 
 LOGGER = logging.getLogger(__name__)
 
 
 async def _perform_auto_renewal(context: ContextTypes.DEFAULT_TYPE, telegram_user_id: int, marzban_username: str, subscription_price: int, api) -> bool:
-    from shared.translator import translator
     price = float(subscription_price)
+    
+    # 1. کسر مبلغ از کیف پول (کسر اول و اصلی)
     new_balance = await crud_user.decrease_wallet_balance(telegram_user_id, price)
+    
     if new_balance is None:
         LOGGER.error(f"Auto-renew for {marzban_username} aborted: Insufficient funds.")
         return False
@@ -42,6 +43,7 @@ async def _perform_auto_renewal(context: ContextTypes.DEFAULT_TYPE, telegram_use
     user_panel_data = await api.get_user_data(marzban_username)
     if not user_panel_data:
         LOGGER.error(f"Auto-renew for {marzban_username} failed: Could not get user data from panel.")
+        # بازگشت وجه چون پنل در دسترس نیست
         await crud_user.increase_wallet_balance(telegram_user_id, price)
         return False
         
@@ -50,31 +52,41 @@ async def _perform_auto_renewal(context: ContextTypes.DEFAULT_TYPE, telegram_use
         'username': marzban_username, 'volume': volume_gb, 'duration': duration,
         'price': price, 'invoice_type': 'RENEWAL'
     }
+    
+    # 2. ساخت فاکتور
+    # ✨ FIX: مقدار from_wallet_amount را 0 می‌گذاریم.
+    # دلیل: مبلغ در مرحله 1 کسر شده است. اگر اینجا عدد بگذاریم، approval.py دوباره کسر می‌کند.
     invoice_obj = await crud_invoice.create_pending_invoice({
         'user_id': telegram_user_id, 
         'plan_details': plan_details, 
         'price': int(price),
-        'from_wallet_amount': price  # تغییر: ثبت صریح اینکه کل مبلغ از کیف پول است
+        'from_wallet_amount': 0 
     })
+    
     if not invoice_obj:
         LOGGER.critical(f"CRITICAL: Wallet balance for {marzban_username} was deducted, but invoice creation failed. Rolling back.")
         await crud_user.increase_wallet_balance(telegram_user_id, price)
         return False
     
+    async def noop(*args, **kwargs): pass
+
     class MockUpdate:
         effective_user = type('obj', (object,), {'id': 0, 'full_name': "سیستم تمدید خودکار"})()
         callback_query = type('obj', (object,), {
             'data': f"approve_receipt_{invoice_obj.invoice_id}",
             'message': type('obj', (object,), {'caption': f"Auto-approved invoice #{invoice_obj.invoice_id}"})(),
-            'answer': asyncio.coroutine(lambda *a, **kw: None),
-            'edit_message_caption': asyncio.coroutine(lambda *a, **kw: None)
+            'answer': noop,
+            'edit_message_caption': noop
         })()
+    # --------------------------
     try:
-        await approve_payment(MockUpdate(), context)
+        # 3. تایید فاکتور و اعمال تمدید در پنل
+        await approve_payment(MockUpdate(), context, auto_approved=True)
         LOGGER.info(f"Auto-renewal for {marzban_username} (Invoice #{invoice_obj.invoice_id}) completed successfully.")
         return True
     except Exception as e:
         LOGGER.critical(f"CRITICAL: Auto-renewal for {marzban_username} failed at approval stage. Rolling back. Error: {e}", exc_info=True)
+        # بازگشت وجه در صورت خطای اتصال به مرزبان یا خطای کد
         await crud_user.increase_wallet_balance(telegram_user_id, price)
         return False
 
@@ -108,7 +120,9 @@ async def check_users_for_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     except Exception as e:
         LOGGER.error(f"Critical error during pre-job preparation: {e}", exc_info=True)
-        await context.bot.send_message(admin_id, "خطا در آماده‌سازی اولیه جاب روزانه.")
+        try:
+            await context.bot.send_message(admin_id, "خطا در آماده‌سازی اولیه جاب روزانه.")
+        except: pass
         return
 
     total_expiring, total_low_data, total_success_renew, total_fail_renew = [], [], [], []
@@ -135,22 +149,31 @@ async def check_users_for_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             marzban_username = link.marzban_username
             telegram_user_id = link.telegram_user_id
             
+            LOGGER.info(f"🔍 [Auto-Renew Check] User: {marzban_username}")
+            
             panel_user = panel_users_dict.get(marzban_username)
             note_info = await crud_user_note.get_user_note(marzban_username)
             
-            if not panel_user or panel_user.get('status') not in ['active', 'limited'] or (note_info and note_info.is_test_account):
-                if panel_user:
-                     LOGGER.info(f"Skipping auto-renew for {marzban_username}: Status is {panel_user.get('status')}")
+            user_status = panel_user.get('status') if panel_user else "NOT_FOUND"
+            
+            if not panel_user or user_status not in ['active', 'limited', 'expired'] or (note_info and note_info.is_test_account):
+                LOGGER.info(f"   -> SKIPPED: Invalid status or is test account.")
                 continue
 
             if expire_ts := panel_user.get('expire'):
                 expire_date = datetime.datetime.fromtimestamp(expire_ts)
                 now = datetime.datetime.now()
-                if now < expire_date < (now + datetime.timedelta(days=days_threshold)):
+                
+                days_left = (expire_date - now).days
+                LOGGER.info(f"   Days Left: {days_left} (Threshold: {days_threshold})")
+                
+                if days_left < days_threshold:
                     wallet_balance = await crud_user.get_user_wallet_balance(telegram_user_id) or 0.0
                     price = float(note_info.subscription_price) if note_info and note_info.subscription_price else 0.0
-
+                    
                     if wallet_balance >= price and price > 0:
+                        LOGGER.info(f"   🚀 STARTING RENEWAL...")
+                        
                         full_user_data = {
                             "telegram_user_id": telegram_user_id, "marzban_username": marzban_username,
                             "subscription_price": int(price), "api": api
@@ -162,14 +185,18 @@ async def check_users_for_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
                             panel_user['panel_name'] = panel.name
                             total_fail_renew.append(panel_user)
                     else:
+                        LOGGER.info(f"   ⚠️ SKIPPED: Insufficient funds.")
                         try:
                             await context.bot.send_message(telegram_user_id, translator.get("reminder_jobs.auto_renew_failed_customer_funds"))
                             panel_user['panel_name'] = panel.name
                             total_fail_renew.append(panel_user)
-                        except Exception as e:
-                            LOGGER.warning(f"Failed to send warning to customer for {marzban_username}: {e}")
+                        except Exception: pass
                     
                     processed_users_in_panel.add(marzban_username)
+                else:
+                    LOGGER.info(f"   -> SKIPPED: Not time yet.")
+            else:
+                LOGGER.info(f"   -> SKIPPED: No expire date.")
         
         for panel_user in panel_users:
             username = panel_user.get('username')
@@ -360,7 +387,6 @@ async def cleanup_expired_test_accounts(context: ContextTypes.DEFAULT_TYPE) -> N
         LOGGER.info("Test account cleanup finished. No accounts were expired.")
 
 
-# --- Scheduling functions remain the same ---
 async def schedule_initial_daily_job(application: Application):
     try:
         settings = await crud_bot_setting.load_bot_settings()
@@ -386,3 +412,5 @@ async def schedule_daily_job(application: Application, time_obj: datetime.time):
     
     job_queue.run_daily(callback=check_users_for_reminders, time=job_time, chat_id=admin_id, name=job_name)
     LOGGER.info(f"Daily job (reminders & cleanup) scheduled for {job_time.strftime('%H:%M')} Tehran time.")
+
+# --- END OF FILE ---

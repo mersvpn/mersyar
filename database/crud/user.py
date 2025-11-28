@@ -7,7 +7,6 @@ from datetime import datetime
 
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
-from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import User as TelegramUser
 from config import config
 
@@ -191,6 +190,5 @@ async def get_user_with_relations(user_id: int) -> Optional[User]:
         except Exception as e:
             LOGGER.error(f"Failed to get user with relations: {e}")
             return None
-
 
 # --- END OF FILE database/crud/user.py ---
