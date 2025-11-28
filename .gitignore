@@ -4,6 +4,7 @@
 # Python virtual environment
 venv/
 .venv/
+env/
 
 # Python cache files
 __pycache__/
@@ -16,10 +17,7 @@ __pycache__/
 *.log
 *.log.*
 
-# Bot status file
+# Bot runtime files
 bot_status.json
-
-# Other runtime files
-*.sessionvenv/ 
-__pycache__/ 
-.env 
+bot_persistence.pickle
+*.session
