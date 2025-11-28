@@ -14,7 +14,10 @@ async def handle_payment_back_button(update, context):
     """Handles the 'Back to Menu' button on invoices."""
     query = update.callback_query
     await query.answer()
-    await send_main_menu(update, context, message_text=_("financials_payment.back_to_main_menu"))
+    
+    context.user_data['is_rerouted_from_conv'] = True
+    
+    await send_main_menu(update, context)
 
 
 def register(application: Application):
