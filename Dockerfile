@@ -17,12 +17,13 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# کپی اسکریپت شروع و تنظیم دسترسی‌ها
-COPY entrypoint.sh .
-# تبدیل فرمت ویندوز به لینوکس (برای جلوگیری از خطای احتمالی) و دادن دسترسی اجرا
-RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
-
+# 1. اول همه فایل‌ها را کپی می‌کنیم
 COPY . .
+
+# 2. حالا entrypoint را اصلاح می‌کنیم (تا مطمئن شویم نسخه نهایی اصلاح شده است)
+# دستور sed فرمت ویندوز (\r\n) را به لینوکس (\n) تبدیل می‌کند
+# دستور chmod قابلیت اجرایی می‌دهد
+RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
 
 ENTRYPOINT ["./entrypoint.sh"]
 CMD ["python", "bot.py"]
