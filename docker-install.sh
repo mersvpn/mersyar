@@ -208,35 +208,28 @@ manage_bot() {
                 info "Step 1: Stopping current services..."
                 docker compose down
                 
-                # --- دانلود کد جدید ---
-                info "Step 2: Downloading latest source code from GitHub..."
+                info "Step 2: Cleaning up build cache..."
+                docker builder prune -f >/dev/null 2>&1
+                
+                info "Step 3: Downloading latest source code..."
+                # کد دانلود (بدون تغییر)
                 GITHUB_USER="mersvpn"
                 GITHUB_REPO="mersyar"
-                
                 LATEST_TAG=$(wget -qO- "https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-                
                 if [ -z "$LATEST_TAG" ]; then
-                    warning "Could not find latest release. Pulling from main branch..."
                     git pull origin main || echo "Git pull failed..."
                 else
-                    info "Downloading version: $LATEST_TAG"
                     wget -q "https://github.com/${GITHUB_USER}/${GITHUB_REPO}/archive/refs/tags/${LATEST_TAG}.tar.gz" -O latest.tar.gz
                     tar -xzf latest.tar.gz --strip-components=1 --exclude='.env' --overwrite
                     rm latest.tar.gz
-                    success "Source code updated to $LATEST_TAG"
                 fi
                 
-                # --- اصلاحیه مهم: دادن مجوز اجرا به فایل استارت ---
-                info "Fixing file permissions..."
+                # اصلاح مجوز فایل استارت
                 chmod +x entrypoint.sh
-                # ------------------------------------------------
-                
-                info "Step 3: Cleaning up build cache..."
-                docker builder prune -f >/dev/null 2>&1
                 
                 info "Step 4: Building new image..."
                 if ! docker compose build --no-cache bot; then
-                    error "Failed to build image. Check logs."
+                    error "Failed to build image. Aborting."
                     docker compose up -d
                     show_menu; return
                 fi
@@ -244,17 +237,19 @@ manage_bot() {
                 info "Step 5: Starting services..."
                 if docker compose up -d; then
                     success "Containers started!"
-                    info "Waiting for bot to initialize..."
+                    info "Waiting for bot initialization..."
                     sleep 5
                     
+                    # --- بخش مهم جدید: آپدیت دیتابیس ---
                     info "Running database migrations..."
                     if ! docker compose exec -T bot alembic upgrade head; then
-                         # تلاش برای ترمیم خودکار دیتابیس
-                        warning "Migration failed, attempting repair..."
+                        warning "Migration failed, attempting auto-repair..."
                         LATEST_ID=$(docker compose exec -T bot alembic heads | awk '{print $1}')
                         docker compose exec -T bot alembic stamp "$LATEST_ID"
                         docker compose exec -T bot alembic upgrade head
                     fi
+                    # -----------------------------------
+                    
                     success "Update Complete!"
                 else
                     error "Failed to start services."
@@ -329,10 +324,20 @@ install_bot() {
     mkdir -p "$PROJECT_DIR"
     cd "$PROJECT_DIR"
 
-    info "-> Generating secure random strings for secrets..."
+    if [ -f .env ]; then
+        info "Existing configuration found. Preserving database credentials..."
+        DB_ROOT_PASSWORD=$(grep DB_ROOT_PASSWORD .env | cut -d '=' -f2 | tr -d '"')
+        DB_PASSWORD=$(grep DB_PASSWORD .env | cut -d '=' -f2 | tr -d '"')
+        # محض احتیاط اگر خالی بود بسازد
+        if [ -z "$DB_ROOT_PASSWORD" ]; then DB_ROOT_PASSWORD=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 20); fi
+        if [ -z "$DB_PASSWORD" ]; then DB_PASSWORD=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 20); fi
+    else
+        info "Generating new secure credentials..."
+        DB_ROOT_PASSWORD=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 20)
+        DB_PASSWORD=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 20)
+    fi
+    
     WEBHOOK_SECRET_TOKEN=$(openssl rand -hex 32)
-    DB_ROOT_PASSWORD=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 20)
-    DB_PASSWORD=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 20)
 
     info "-> Creating .env file..."
     cat << EOF > .env
@@ -477,43 +482,32 @@ EOF
     # ==============================================================================
     
     # --- 5. Obtain SSL Certificate FIRST ---
-    info "[5/7] Obtaining SSL certificate with Certbot..."
-    info "-> Ensuring Certbot is installed..."
-    if ! command -v certbot &> /dev/null; then
-        apt-get update -y > /dev/null && apt-get install -y certbot python3-certbot-nginx > /dev/null
-    fi
-
-    if ! systemctl is-active --quiet nginx; then
-        warning "Nginx is not running. Starting it temporarily for SSL challenge."
-        systemctl start nginx
-        NGINX_WAS_STOPPED=true
+    info "[5/7] Obtaining SSL certificate..."
+    
+    # نصب ابزارها
+    if ! command -v certbot &> /dev/null; then 
+        apt-get update -y && apt-get install -y certbot python3-certbot-nginx
     fi
     
-    info "-> Requesting certificate using webroot method..."
+    # توقف Nginx برای آزادسازی پورت 80
+    systemctl stop nginx || true
     mkdir -p /var/www/html
-    certbot certonly --webroot -w /var/www/html -d "${BOT_DOMAIN}" --non-interactive --agree-tos --email "${ADMIN_EMAIL}"
-
-    if [[ "$NGINX_WAS_STOPPED" == "true" ]]; then
-        info "-> Stopping temporary Nginx instance."
-        systemctl stop nginx
+    
+    info "Requesting Certbot Certificate (Standalone Mode)..."
+    if certbot certonly --standalone -d "${BOT_DOMAIN}" --non-interactive --agree-tos --email "${ADMIN_EMAIL}"; then
+        success "SSL certificate obtained."
+    else
+        error "Failed to obtain SSL certificate. Check your domain DNS."
+        exit 1
     fi
     
     SSL_CERT_PATH="/etc/letsencrypt/live/${BOT_DOMAIN}/fullchain.pem"
-    if [ ! -f "$SSL_CERT_PATH" ]; then
-        error "Failed to obtain SSL certificate. Check logs in /var/log/letsencrypt/."
-        error "Make sure domain ${BOT_DOMAIN} points to this server's IP and try again."
-        exit 1
-    fi
-    success "SSL certificate obtained successfully."
-
-    # --- 6. Configure Nginx with the new SSL certificate ---
-    info "[6/7] Configuring Nginx reverse proxy with SSL..."
-    if ! command -v nginx &> /dev/null; then warning "Nginx not found. Installing..." && apt-get update -y > /dev/null && apt-get install -y nginx > /dev/null; fi
-    
-    NGINX_CONF="/etc/nginx/sites-available/mersyar"
     SSL_KEY_PATH="/etc/letsencrypt/live/${BOT_DOMAIN}/privkey.pem"
 
-    info "-> Creating Nginx configuration file..."
+    info "[6/7] Configuring Nginx..."
+    if ! command -v nginx &> /dev/null; then apt-get install -y nginx; fi
+    
+    NGINX_CONF="/etc/nginx/sites-available/mersyar"
     cat << EOF > "$NGINX_CONF"
 server {
     listen 80;
@@ -536,12 +530,16 @@ server {
 }
 EOF
     ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
+    
+    # استارت نهایی
+    systemctl start nginx
+    systemctl reload nginx
 
-    # --- 7. Finalizing ---
-    info "[7/7] Finalizing the installation..."
+    info "[7/7] Finalizing..."
     cp "$0" "$CLI_COMMAND_PATH"
     chmod +x "$CLI_COMMAND_PATH"
-    success "CLI command 'mersyar' created/updated."
+    
+    success "Installation Complete! Access via https://${BOT_DOMAIN}"
     
     info "Testing Nginx configuration and reloading..."
     if nginx -t; then
